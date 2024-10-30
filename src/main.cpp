@@ -1,5 +1,5 @@
-#include <ESP32Time.h>
 #include <EspBleControls.h>
+#include <ESP32Time.h>
 
 #define LIGHT_PIN 21
 
@@ -12,11 +12,11 @@ BLECharacteristic* floatChar;
 BLECharacteristic* angleChar;
 BLECharacteristic* momentChar;
 BLECharacteristic* colorChar;
-BLECharacteristic* intervalChar;
+IntervalControl* intervalControl;
 
-ESP32Time espRtc;
-uint32_t timeValue = 1729800000UL;
-
+const uint32_t initialTime = 1729800000UL;
+uint32_t clockTimeStamp;
+ESP32Time espClock;
 EspBleControls* controls;
 
 void toggleLed(std::string value) {
@@ -27,22 +27,25 @@ void toggleLed(std::string value) {
   }
 };
 
-void notifyClock(uint16_t delayMs, uint32_t timeValue) { //TODO this function should be a Publisher for the time values
-  if (controls->isAuthorised() && controls->isConnected()) {
-    timerChar->setValue(timeValue);
-    timerChar->notify();
-    delay(delayMs); // TODO replace the delay with the timeCheck
+void notifyClock(uint16_t delaySeconds) { //TODO this function should be a Publisher for the time values
+  if (hasTimePassed(clockTimeStamp, delaySeconds)) {
+    if (timerChar != nullptr && controls->isAuthorised() && controls->isConnected()) {
+      uint32_t timeValue = espClock.getEpoch();
+      timerChar->setValue(timeValue);
+      timerChar->notify();
+    }
+    clockTimeStamp = millis();
   }
 }
 
 void setup() {
 
-  espRtc.setTime(timeValue);
+  espClock.setTime(initialTime);
   pinMode(LIGHT_PIN, OUTPUT);
 
   controls = new EspBleControls("Kitchen Dimmer", 228378);
 
-  timerChar = controls->createClockControl("Clock Control", timeValue, true, [](uint32_t value) -> void { espRtc.setTime(value); });
+  timerChar = controls->createClockControl("Clock Control", initialTime, true, [](uint32_t time) -> void { espClock.setTime(time); });
   switchChar = controls->createSwitchControl("Switch Control", "OFF", false, [](std::string value) -> void { toggleLed(value); });
   momentChar = controls->createMomentaryControl("Momentary Control", "OFF", false, [](std::string value) -> void { toggleLed(value); });
   sliderChar = controls->createSliderControl("Slider controller", -255, 255, 32, 0, false, [](int32_t value) -> void { /* do something with this value */ });
@@ -51,11 +54,12 @@ void setup() {
   stringChar = controls->createStringControl("Text controller", 128, "Text", false, [](std::string value) -> void { /* do something with this value */ });
   angleChar = controls->createAngleControl("Angle controller", 55, false, false, [](uint32_t value) -> void { /* do something with this value */ });
   colorChar = controls->createColorControl("Color controller", "FFFF00", false, [](std::string value) -> void { /* do something with this value */ });
-  intervalChar = controls->createIntervalControl("Interval controller", 288, false, [](std::vector<bool> value) -> void { /* do something with this value */ });
+  controls->createIntervalControl("Interval controller", 288, 10, [](bool isOn) -> void { if (isOn) toggleLed("ON"); else toggleLed("OFF"); });
 
   controls->startService();
 }
 
 void loop() {
-  notifyClock(1000, espRtc.getEpoch());
+  notifyClock(1);
+  controls->loopCallbacks();
 }
