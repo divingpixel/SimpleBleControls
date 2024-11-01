@@ -12,7 +12,6 @@ BLECharacteristic* floatChar;
 BLECharacteristic* angleChar;
 BLECharacteristic* momentChar;
 BLECharacteristic* colorChar;
-IntervalControl* intervalControl;
 
 const uint32_t initialTime = 1729800000UL;
 uint32_t clockTimeStamp;
@@ -29,11 +28,11 @@ void toggleLed(std::string value) {
 
 void notifyClock(uint16_t delaySeconds) { //TODO this function should be a Publisher for the time values
   if (hasTimePassed(clockTimeStamp, delaySeconds)) {
-    if (timerChar != nullptr && controls->isAuthorised() && controls->isConnected()) {
+    //if (timerChar != nullptr && controls->isAuthorised() && controls->isConnected()) {
       uint32_t timeValue = espClock.getEpoch();
       timerChar->setValue(timeValue);
       timerChar->notify();
-    }
+    //}
     clockTimeStamp = millis();
   }
 }

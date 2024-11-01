@@ -79,9 +79,10 @@ public:
 class IntervalControl : public ControlCallback {
 public:
     IntervalControl() = default;
-    void set(BLECharacteristic* bleCharacteristic, const uint16_t checkDelaySeconds, std::function<void(bool)> onIntervalToggle);
-    void setIntervals(std::vector<char> intervals);
+    void setup(BLECharacteristic* bleCharacteristic, const uint16_t checkDelaySeconds, std::function<void(bool)> onIntervalToggle);
     void update() override { checkIntervalChange(); }
+    CharacteristicCallback* setCallback(const std::string charDescription, bool* isDeviceAuthorised);
+    BLECharacteristic* getCharacteristic() { return m_bleCharacteristic; };
 private:
     void checkIntervalChange();
     ESP32Time espClock;
@@ -92,14 +93,21 @@ private:
     uint32_t m_lastNotificationTimeStamp;
 };
 
+class ClockControl : public ControlCallback {
+public:
+    void update() override { updateTime(); }
+private:
+    void updateTime();
+};
+
 // --------------------------------------------------------------------------------------------------------------------
 
 class EspBleControls {
 public:
     EspBleControls(const std::string deviceName, const uint32_t passkey = 0);
 
-    bool isConnected();
-    bool isAuthorised();
+    // bool isConnected();
+    // bool isAuthorised();
     void startService();
     void clearPrefs();
     void loopCallbacks();
@@ -200,9 +208,9 @@ public:
         void (onColorChanged)(const std::string)
     );
     
-    //24 hours ON/OFF interval setter with binary value for each division. Sends and receives a string where each bit is an division.
+    //24 hours ON/OFF interval setter with binary value for each division.
     //Divisions will be multiple of 24, with minimum value 24 and maximum value 1440.
-    //If onValueReceived function is nullptr then the value will be read only.
+    //If checkDelaySeconds is 0 the onIntervalToggle function will not be executed
     IntervalControl* createIntervalControl(
         const std::string description,
         const uint16_t divisions, 
@@ -224,7 +232,6 @@ private:
     const uint16_t getCharIndex(const std::string charId);
     const boolean characteristicCounterExists(const std::string charId);
     std::map<std::string, uint16_t> m_charsCounter;
-    //std::map<std::string, uint32_t> m_charLastNotificationTimeStamp;
     std::vector<ControlCallback*> m_controlsCallbacks;
     uint32_t m_pin;
     bool m_isDeviceAuthorised;

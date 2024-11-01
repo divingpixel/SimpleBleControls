@@ -104,29 +104,6 @@ const std::string getCharParamValue(const std::string uuid, uint8_t position) {
 
 // --------------------------------------------------------------------------------------------------------------------
 
-void IntervalControl::checkIntervalChange() {
-    if (hasTimePassed(m_lastNotificationTimeStamp, m_checkDelaySeconds)) {
-        if (m_onIntervalToggle != nullptr && (m_intervals.size() >= DAY_HOURS)) {
-            size_t intervalIndex = getIntervalIndex(espClock.getEpoch(), m_intervals.size());
-            printf ("Interval %i is %i\n", intervalIndex, m_intervals[intervalIndex]);
-            m_onIntervalToggle(m_intervals[intervalIndex] == 1);
-        }
-        m_lastNotificationTimeStamp = millis();
-    }
-}
-
-void IntervalControl::set(BLECharacteristic* bleCharacteristic, const uint16_t checkDelaySeconds, std::function<void(bool)> onIntervalToggle){
-    m_checkDelaySeconds = checkDelaySeconds;
-    m_onIntervalToggle = onIntervalToggle;
-    m_bleCharacteristic = bleCharacteristic;
-}
-
-void IntervalControl::setIntervals(std::vector<char> intervals) {
-    m_intervals = intervals;
-}
-
-// --------------------------------------------------------------------------------------------------------------------
-
 const char CharacteristicCallback::getValueType() {
     if (m_pIntFunc != nullptr) return 'i';
     if (m_pUIntFunc != nullptr) return 'u';
@@ -140,9 +117,9 @@ void CharacteristicCallback::executeCallback(BLECharacteristic* pChar, bool save
     Preferences m_preferences;
     m_preferences.begin(PREFERENCES_ID, false);
     const std::string controlId = pChar->getUUID().toString().substr(24, 12);
-    uint8_t* byteArrayValue = pChar->getData();
+    uint8_t* m_byteArray = pChar->getData();
     if (m_pFloatFunc != nullptr) {
-        float_t floatValue = bytesToFloat(byteArrayValue);
+        float_t floatValue = bytesToFloat(m_byteArray);
         printf("Received %g float from %s\n", floatValue, m_callerName.c_str());
         if (saveValues) {
             m_preferences.putFloat(controlId.c_str(), floatValue);
@@ -151,7 +128,7 @@ void CharacteristicCallback::executeCallback(BLECharacteristic* pChar, bool save
         m_pFloatFunc(floatValue);
     }
     if (m_pUIntFunc != nullptr) {
-        uint32_t intValue = bytesToIntegerType<uint32_t>(byteArrayValue);
+        uint32_t intValue = bytesToIntegerType<uint32_t>(m_byteArray);
         printf("Received %i Uint from %s\n", intValue, m_callerName.c_str());
         if (saveValues) {
             m_preferences.putUInt(controlId.c_str(), intValue);
@@ -160,7 +137,7 @@ void CharacteristicCallback::executeCallback(BLECharacteristic* pChar, bool save
         m_pUIntFunc(intValue);
     }
     if (m_pIntFunc != nullptr) {
-        int32_t intValue = bytesToIntegerType<int32_t>(byteArrayValue);
+        int32_t intValue = bytesToIntegerType<int32_t>(m_byteArray);
         printf("Received %i int from %s\n", intValue, m_callerName.c_str());
         if (saveValues) {
             m_preferences.putInt(controlId.c_str(), intValue);
@@ -181,14 +158,14 @@ void CharacteristicCallback::executeCallback(BLECharacteristic* pChar, bool save
     }
     if (m_pBoolsFunc != nullptr) {
         size_t m_dataSize = pChar->getLength();
-        printf("Received %i bytes as %s from %s\n", m_dataSize, bytesToConsole(byteArrayValue, m_dataSize).c_str(), m_callerName.c_str());
+        printf("Received %i bytes as %s from %s\n", m_dataSize, bytesToConsole(m_byteArray, m_dataSize).c_str(), m_callerName.c_str());
         if (saveValues) {
-            m_preferences.putBytes(controlId.c_str(), byteArrayValue, m_dataSize);
+            m_preferences.putBytes(controlId.c_str(), m_byteArray, m_dataSize);
             uint8_t savedValue[m_dataSize];
             m_preferences.getBytes(controlId.c_str(), savedValue, m_dataSize);
             printf("Saved %s bytes to %s\n", bytesToConsole(savedValue, m_dataSize).c_str(), controlId.c_str());
         }
-        m_pBoolsFunc(bytesToBools(byteArrayValue, m_dataSize));
+        m_pBoolsFunc(bytesToBools(m_byteArray, m_dataSize));
     }
     m_preferences.end();
 }
@@ -245,6 +222,35 @@ CharacteristicCallback::CharacteristicCallback(
 
 // --------------------------------------------------------------------------------------------------------------------
 
+void IntervalControl::checkIntervalChange() {
+    if (m_checkDelaySeconds != 0 && hasTimePassed(m_lastNotificationTimeStamp, m_checkDelaySeconds)) {
+        if (m_onIntervalToggle != nullptr && (m_intervals.size() >= DAY_HOURS)) {
+            size_t intervalIndex = getIntervalIndex(espClock.getEpoch(), m_intervals.size());
+            printf ("Interval %i is %i\n", intervalIndex, m_intervals[intervalIndex]);
+            m_onIntervalToggle(m_intervals[intervalIndex] == 1);
+        }
+        m_lastNotificationTimeStamp = millis();
+    }
+}
+
+CharacteristicCallback* IntervalControl::setCallback(const std::string charDescription, bool* isDeviceAuthorised){
+    std::function<void(std::vector<char>)> onIntervalsChanged = [&](std::vector<char> intervals){
+         m_intervals = intervals;
+         m_lastNotificationTimeStamp = millis() - m_checkDelaySeconds * 1000;
+         checkIntervalChange();
+    };
+    return new CharacteristicCallback(onIntervalsChanged, charDescription, isDeviceAuthorised);;
+}
+
+void IntervalControl::setup(BLECharacteristic* bleCharacteristic, const uint16_t checkDelaySeconds, std::function<void(bool)> onIntervalToggle){
+    m_checkDelaySeconds = checkDelaySeconds;
+    m_onIntervalToggle = onIntervalToggle;
+    m_bleCharacteristic = bleCharacteristic;
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+
+
 EspBleControls::EspBleControls(const std::string deviceName, const uint32_t passkey) {
 
     m_isDeviceConnected = false;
@@ -273,13 +279,13 @@ EspBleControls::EspBleControls(const std::string deviceName, const uint32_t pass
     m_pService = m_pServer->createService(BLEUUID(SERVICE_UUID), 128, 0);
 }
 
-bool EspBleControls::isConnected() {
-    return m_isDeviceConnected;
-}
+// bool EspBleControls::isConnected() {
+//     return m_isDeviceConnected;
+// }
 
-bool EspBleControls::isAuthorised() {
-    return m_isDeviceAuthorised;
-}
+// bool EspBleControls::isAuthorised() {
+//     return m_isDeviceAuthorised;
+// }
 
 void EspBleControls::startService() {
     m_pService->start();
@@ -295,7 +301,7 @@ void EspBleControls::clearPrefs() {
 }
 
 void EspBleControls::loopCallbacks() {
-    if (m_controlsCallbacks.size() > 0) {
+    if (m_controlsCallbacks.size() > 0 && m_isDeviceAuthorised && m_isDeviceConnected) {
         for (size_t index = 0; index < m_controlsCallbacks.size(); index++) {
             m_controlsCallbacks[index]->update();
         }
@@ -550,15 +556,13 @@ IntervalControl* EspBleControls::createIntervalControl(
         return nullptr;
     } else {
         const std::string newUuid = generateCharUuid(INTRV_UUID_SUFFIX, divisions);
-        CharacteristicCallback* callback = nullptr;
         const std::string initialValue(divisions / 8, 0);
         IntervalControl* intervalControl = new IntervalControl();
-        std::function<void(std::vector<char>)> onIntervalsChanged = [&](std::vector<char> intervals) { intervalControl->setIntervals(intervals); };
-        callback = new CharacteristicCallback(onIntervalsChanged, description, &m_isDeviceAuthorised);
+        CharacteristicCallback* callback = intervalControl->setCallback(description, &m_isDeviceAuthorised);
         BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, false, callback);
-        intervalControl->set(bleCharacteristic, checkDelaySeconds, onIntervalToggle);
+        intervalControl->setup(bleCharacteristic, checkDelaySeconds, onIntervalToggle);
         m_controlsCallbacks.push_back(intervalControl);
-        return intervalControl;
+        return intervalControl;;
     }
 }
 
