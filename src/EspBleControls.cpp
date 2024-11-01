@@ -104,6 +104,20 @@ const std::string getCharParamValue(const std::string uuid, uint8_t position) {
 
 // --------------------------------------------------------------------------------------------------------------------
 
+SecurityCallback::SecurityCallback(std::function<void(bool)> onDeviceAuthentication, BLEServer* pServer) {
+    m_onDeviceAuthentication = onDeviceAuthentication;
+    m_pServer = pServer;
+};
+
+// --------------------------------------------------------------------------------------------------------------------
+
+ServerCallback::ServerCallback(std::function<void(bool)> onDeviceConnection, std::function<void(bool)> onDeviceAuthentication) {
+    m_onDeviceConnection = onDeviceConnection;
+    m_onDeviceAuthentication = onDeviceAuthentication;
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+
 const char CharacteristicCallback::getValueType() {
     if (m_pIntFunc != nullptr) return 'i';
     if (m_pUIntFunc != nullptr) return 'u';
@@ -171,7 +185,7 @@ void CharacteristicCallback::executeCallback(BLECharacteristic* pChar, bool save
 }
 
 CharacteristicCallback::CharacteristicCallback(
-    void (*func)(uint32_t) = nullptr,
+    std::function<void(uint32_t)> func = nullptr,
     const std::string charDescription = "intCharId",
     bool* isDeviceAuthorised = nullptr
 ) {
@@ -181,7 +195,7 @@ CharacteristicCallback::CharacteristicCallback(
 };
 
 CharacteristicCallback::CharacteristicCallback(
-    void (*func)(int32_t) = nullptr,
+    std::function<void(int32_t)> func = nullptr,
     const std::string charDescription = "intCharId",
     bool* isDeviceAuthorised = nullptr
 ) {
@@ -191,7 +205,7 @@ CharacteristicCallback::CharacteristicCallback(
 };
 
 CharacteristicCallback::CharacteristicCallback(
-    void (*func)(float_t) = nullptr,
+    std::function<void(float_t)> func = nullptr,
     const std::string charDescription = "floatCharId",
     bool* isDeviceAuthorised = nullptr
 ) {
@@ -201,7 +215,7 @@ CharacteristicCallback::CharacteristicCallback(
 };
 
 CharacteristicCallback::CharacteristicCallback(
-    void (*func)(std::string) = nullptr,
+    std::function<void(std::string)> func = nullptr,
     const std::string charDescription = "stringCharId",
     bool* isDeviceAuthorised = nullptr
 ) {
@@ -239,7 +253,7 @@ CharacteristicCallback* IntervalControl::setCallback(const std::string charDescr
          m_lastNotificationTimeStamp = millis() - m_checkDelaySeconds * 1000;
          checkIntervalChange();
     };
-    return new CharacteristicCallback(onIntervalsChanged, charDescription, isDeviceAuthorised);;
+    return new CharacteristicCallback(onIntervalsChanged, charDescription, isDeviceAuthorised);
 }
 
 void IntervalControl::setup(BLECharacteristic* bleCharacteristic, const uint16_t checkDelaySeconds, std::function<void(bool)> onIntervalToggle){
@@ -250,6 +264,30 @@ void IntervalControl::setup(BLECharacteristic* bleCharacteristic, const uint16_t
 
 // --------------------------------------------------------------------------------------------------------------------
 
+void ClockControl::updateTime() {
+    if (m_notifyDelaySeconds != 0 && hasTimePassed(m_lastNotificationTimeStamp, m_notifyDelaySeconds)) {
+      uint32_t timeValue = espClock.getEpoch();
+      m_bleCharacteristic->setValue(timeValue);
+      m_bleCharacteristic->notify();
+      m_lastNotificationTimeStamp = millis();
+    }
+}
+
+CharacteristicCallback* ClockControl::setCallback(const std::string charDescription, bool* isDeviceAuthorised) {
+    std::function<void(uint32_t)> onTimeSet = [&](uint32_t time) { 
+        espClock.setTime(time); 
+        updateTime();
+    };
+    return new CharacteristicCallback(onTimeSet, charDescription, isDeviceAuthorised);
+}
+
+void ClockControl::setup(BLECharacteristic* bleCharacteristic, const uint16_t notifyDelaySeconds, uint32_t initialValue){
+    m_notifyDelaySeconds = notifyDelaySeconds;
+    m_bleCharacteristic = bleCharacteristic;
+    espClock.setTime(initialValue);
+}
+
+// --------------------------------------------------------------------------------------------------------------------
 
 EspBleControls::EspBleControls(const std::string deviceName, const uint32_t passkey) {
 
@@ -279,14 +317,6 @@ EspBleControls::EspBleControls(const std::string deviceName, const uint32_t pass
     m_pService = m_pServer->createService(BLEUUID(SERVICE_UUID), 128, 0);
 }
 
-// bool EspBleControls::isConnected() {
-//     return m_isDeviceConnected;
-// }
-
-// bool EspBleControls::isAuthorised() {
-//     return m_isDeviceAuthorised;
-// }
-
 void EspBleControls::startService() {
     m_pService->start();
     startAdvertising();
@@ -301,10 +331,10 @@ void EspBleControls::clearPrefs() {
 }
 
 void EspBleControls::loopCallbacks() {
-    if (m_controlsCallbacks.size() > 0 && m_isDeviceAuthorised && m_isDeviceConnected) {
-        for (size_t index = 0; index < m_controlsCallbacks.size(); index++) {
-            m_controlsCallbacks[index]->update();
-        }
+    if (m_controls.size() > 0 && m_isDeviceAuthorised && m_isDeviceConnected) {
+        for (std::map<std::string, ControlCallback*>::iterator it = m_controls.begin(); it!=m_controls.end(); ++it) {
+            it->second->update();
+        };
     }
 }
 
@@ -433,18 +463,22 @@ const boolean EspBleControls::characteristicCounterExists(const std::string char
     return charIterator != m_charsCounter.end();
 }
 
-BLECharacteristic* EspBleControls::createClockControl(
+ClockControl* EspBleControls::createClockControl(
     const std::string description,
     const uint32_t initialValue,
-    const boolean shouldNotify,
-    void (onTimeSet)(uint32_t)
+    uint16_t notifyDelaySeconds
 ) {
-    if (!characteristicCounterExists(CLOCK_UUID_SUFFIX)) {
-        CharacteristicCallback* callback = nullptr;
-        if (onTimeSet != nullptr) callback = new CharacteristicCallback(onTimeSet, description, &m_isDeviceAuthorised);
-        return createCharacteristic(generateCharUuid(CLOCK_UUID_SUFFIX), description, initialValue, shouldNotify, callback);
+    if (characteristicCounterExists(CLOCK_UUID_SUFFIX)) {
+        createStringControl(description, 256, "Only one Clock control instance can be created!", false, nullptr);
+        return nullptr;
     } else {
-        return m_pService->getCharacteristic(generateCharUuid(CLOCK_UUID_SUFFIX));
+        const std::string newUuid = generateCharUuid(CLOCK_UUID_SUFFIX, notifyDelaySeconds);
+        ClockControl* clockControl = new ClockControl();
+        CharacteristicCallback* callback = clockControl->setCallback(description, &m_isDeviceAuthorised);
+        BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, true, callback);
+        clockControl->setup(bleCharacteristic, notifyDelaySeconds, initialValue);
+        m_controls[getCharParamValue(newUuid , 4)] = clockControl;
+        return clockControl;
     }
 }
 
@@ -452,7 +486,7 @@ BLECharacteristic* EspBleControls::createSwitchControl(
     std::string description,
     std::string initialValue,
     boolean shouldNotify,
-    void (onSwitchToggle)(std::string)
+    std::function<void(std::string)> onSwitchToggle
 ) {
     CharacteristicCallback* callback = nullptr;
     if (onSwitchToggle != nullptr) callback = new CharacteristicCallback(onSwitchToggle, description, &m_isDeviceAuthorised);
@@ -463,7 +497,7 @@ BLECharacteristic* EspBleControls::createMomentaryControl(
     std::string description,
     std::string initialValue,
     boolean shouldNotify,
-    void (onButtonPressed)(std::string)
+    std::function<void(std::string)> onButtonPressed
 ) {
     CharacteristicCallback* callback = nullptr;
     if (onButtonPressed != nullptr) callback = new CharacteristicCallback(onButtonPressed, description, &m_isDeviceAuthorised);
@@ -477,7 +511,7 @@ BLECharacteristic* EspBleControls::createSliderControl(
     uint16_t steps,
     int initialValue,
     boolean shouldNotify,
-    void (onSliderMoved)(int32_t)
+    std::function<void(int32_t)> onSliderMoved
 ) {
     CharacteristicCallback* callback = nullptr;
     if (onSliderMoved != nullptr) callback = new CharacteristicCallback(onSliderMoved, description, &m_isDeviceAuthorised);
@@ -490,10 +524,10 @@ BLECharacteristic* EspBleControls::createIntControl(
     short maxValue,
     int initialValue,
     boolean shouldNotify,
-    void (onValueReceived)(int32_t)
+    std::function<void(int32_t)> onIntReceived
 ) {
     CharacteristicCallback* callback = nullptr;
-    if (onValueReceived != nullptr) callback = new CharacteristicCallback(onValueReceived, description, &m_isDeviceAuthorised);
+    if (onIntReceived != nullptr) callback = new CharacteristicCallback(onIntReceived, description, &m_isDeviceAuthorised);
     return createCharacteristic(generateCharUuid(INTGR_UUID_SUFFIX, minValue, maxValue), description, initialValue, shouldNotify, callback);
 }
 
@@ -503,10 +537,10 @@ BLECharacteristic* EspBleControls::createFloatControl(
     short maxValue,
     float_t initialValue,
     boolean shouldNotify,
-    void (onValueReceived)(float_t)
+    std::function<void(float_t)> onFloatReceived
 ) {
     CharacteristicCallback* callback = nullptr;
-    if (onValueReceived != nullptr) callback = new CharacteristicCallback(onValueReceived, description, &m_isDeviceAuthorised);
+    if (onFloatReceived != nullptr) callback = new CharacteristicCallback(onFloatReceived, description, &m_isDeviceAuthorised);
     return createCharacteristic(generateCharUuid(FLOAT_UUID_SUFFIX, minValue, maxValue), description, initialValue, shouldNotify, callback);
 }
 
@@ -515,10 +549,10 @@ BLECharacteristic* EspBleControls::createStringControl(
     uint16_t maxLength,
     std::string initialValue,
     boolean shouldNotify,
-    void (onValueReceived)(std::string)
+    std::function<void(std::string)> onTextReceived
 ) {
     CharacteristicCallback* callback = nullptr;
-    if (onValueReceived != nullptr) callback = new CharacteristicCallback(onValueReceived, description, &m_isDeviceAuthorised);
+    if (onTextReceived != nullptr) callback = new CharacteristicCallback(onTextReceived, description, &m_isDeviceAuthorised);
     return createCharacteristic(generateCharUuid(STRNG_UUID_SUFFIX, maxLength), description, initialValue, shouldNotify, callback);
 }
 
@@ -527,7 +561,7 @@ BLECharacteristic* EspBleControls::createAngleControl(
     uint32_t initialValue,
     boolean isComapss,
     boolean shouldNotify,
-    void (onAngleChanged)(uint32_t)
+    std::function<void(uint32_t)> onAngleChanged
 ) {
     CharacteristicCallback* callback = nullptr;
     if (onAngleChanged != nullptr) callback = new CharacteristicCallback(onAngleChanged, description, &m_isDeviceAuthorised);
@@ -538,7 +572,7 @@ BLECharacteristic* EspBleControls::createColorControl(
     std::string description,
     std::string initialValue,
     boolean shouldNotify,
-    void (onColorChanged)(std::string)
+    std::function<void(std::string)> onColorChanged
 ) {
     CharacteristicCallback* callback = nullptr;
     if (onColorChanged != nullptr) callback = new CharacteristicCallback(onColorChanged, description, &m_isDeviceAuthorised);
@@ -551,31 +585,17 @@ IntervalControl* EspBleControls::createIntervalControl(
     const uint16_t checkDelaySeconds,
     std::function<void(bool)> onIntervalToggle
 ) {
-    if (!characteristicCounterExists(CLOCK_UUID_SUFFIX)) {
-        createStringControl(description, 256, "There is no Clock control defined!\nPlease add one before creating an Interval control!", false, nullptr);
-        return nullptr;
-    } else {
+    if (characteristicCounterExists(CLOCK_UUID_SUFFIX)) {
         const std::string newUuid = generateCharUuid(INTRV_UUID_SUFFIX, divisions);
         const std::string initialValue(divisions / 8, 0);
         IntervalControl* intervalControl = new IntervalControl();
         CharacteristicCallback* callback = intervalControl->setCallback(description, &m_isDeviceAuthorised);
         BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, false, callback);
         intervalControl->setup(bleCharacteristic, checkDelaySeconds, onIntervalToggle);
-        m_controlsCallbacks.push_back(intervalControl);
-        return intervalControl;;
+        m_controls[getCharParamValue(newUuid , 4)] = intervalControl;
+        return intervalControl;
+    } else {
+        createStringControl(description, 256, "There is no Clock control defined!\nPlease add one before creating an Interval control!", false, nullptr);
+        return nullptr;
     }
-}
-
-// --------------------------------------------------------------------------------------------------------------------
-
-SecurityCallback::SecurityCallback(std::function<void(bool)> onDeviceAuthentication, BLEServer* pServer) {
-    m_onDeviceAuthentication = onDeviceAuthentication;
-    m_pServer = pServer;
-};
-
-// --------------------------------------------------------------------------------------------------------------------
-
-ServerCallback::ServerCallback(std::function<void(bool)> onDeviceConnection, std::function<void(bool)> onDeviceAuthentication) {
-    m_onDeviceConnection = onDeviceConnection;
-    m_onDeviceAuthentication = onDeviceAuthentication;
 }

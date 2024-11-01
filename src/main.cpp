@@ -3,7 +3,6 @@
 
 #define LIGHT_PIN 21
 
-BLECharacteristic* timerChar;
 BLECharacteristic* switchChar;
 BLECharacteristic* sliderChar;
 BLECharacteristic* stringChar;
@@ -14,8 +13,6 @@ BLECharacteristic* momentChar;
 BLECharacteristic* colorChar;
 
 const uint32_t initialTime = 1729800000UL;
-uint32_t clockTimeStamp;
-ESP32Time espClock;
 EspBleControls* controls;
 
 void toggleLed(std::string value) {
@@ -26,25 +23,13 @@ void toggleLed(std::string value) {
   }
 };
 
-void notifyClock(uint16_t delaySeconds) { //TODO this function should be a Publisher for the time values
-  if (hasTimePassed(clockTimeStamp, delaySeconds)) {
-    //if (timerChar != nullptr && controls->isAuthorised() && controls->isConnected()) {
-      uint32_t timeValue = espClock.getEpoch();
-      timerChar->setValue(timeValue);
-      timerChar->notify();
-    //}
-    clockTimeStamp = millis();
-  }
-}
-
 void setup() {
 
-  espClock.setTime(initialTime);
   pinMode(LIGHT_PIN, OUTPUT);
 
   controls = new EspBleControls("Kitchen Dimmer", 228378);
 
-  timerChar = controls->createClockControl("Clock Control", initialTime, true, [](uint32_t time) -> void { espClock.setTime(time); });
+  controls->createClockControl("Clock Control", initialTime, 1);
   switchChar = controls->createSwitchControl("Switch Control", "OFF", false, [](std::string value) -> void { toggleLed(value); });
   momentChar = controls->createMomentaryControl("Momentary Control", "OFF", false, [](std::string value) -> void { toggleLed(value); });
   sliderChar = controls->createSliderControl("Slider controller", -255, 255, 32, 0, false, [](int32_t value) -> void { /* do something with this value */ });
@@ -59,6 +44,5 @@ void setup() {
 }
 
 void loop() {
-  notifyClock(1);
   controls->loopCallbacks();
 }

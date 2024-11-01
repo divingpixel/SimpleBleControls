@@ -23,7 +23,7 @@
 
 #define CHAR_UUID_PREFIX       "e5932b1e"
 
-#define CLOCK_UUID_SUFFIX      "636c6f636b" // ID-0000-0000-0000-CID+count
+#define CLOCK_UUID_SUFFIX      "636c6f636b" // ID-updateInterval-0000-0000-CID+count
 #define INTRV_UUID_SUFFIX      "696e747276" // ID-divisions-0000-0000-CID+count -> divisions multiple of 24, min 24, max 1440
 #define SWTCH_UUID_SUFFIX      "7377746368" // ID-0000-0000-0000-CID+count
 #define SLIDR_UUID_SUFFIX      "736c696472" // ID-minValue-maxValue-steps-CID+count -> min/max between -32767..32767
@@ -46,10 +46,10 @@ const int getIntervalIndex(uint32_t currentTime, uint16_t dayDivisions);
 
 class CharacteristicCallback : public BLECharacteristicCallbacks {
 public:
-    CharacteristicCallback(void (*func)(uint32_t), const std::string charDescription, bool* isDeviceAuthorised);
-    CharacteristicCallback(void (*func)(int32_t), const std::string charDescription, bool* isDeviceAuthorised);
-    CharacteristicCallback(void (*func)(float_t), const std::string charDescription, bool* isDeviceAuthorised);
-    CharacteristicCallback(void (*func)(std::string), const std::string charDescription, bool* isDeviceAuthorised);
+    CharacteristicCallback(std::function<void(uint32_t)>, const std::string charDescription, bool* isDeviceAuthorised);
+    CharacteristicCallback(std::function<void(int32_t)>, const std::string charDescription, bool* isDeviceAuthorised);
+    CharacteristicCallback(std::function<void(float_t)>, const std::string charDescription, bool* isDeviceAuthorised);
+    CharacteristicCallback(std::function<void(std::string)>, const std::string charDescription, bool* isDeviceAuthorised);
     CharacteristicCallback(std::function<void(std::vector<char>)>, const std::string charDescription, bool* isDeviceAuthorised);
 
     const char getValueType();
@@ -60,10 +60,10 @@ public:
     }
 
 private: 
-    void (*m_pUIntFunc)(uint32_t) = nullptr;
-    void (*m_pIntFunc)(int32_t) = nullptr;
-    void (*m_pFloatFunc)(float_t) = nullptr;
-    void (*m_pStringFunc)(std::string) = nullptr;
+    std::function<void(uint32_t)> m_pUIntFunc = nullptr;
+    std::function<void(int32_t)> m_pIntFunc= nullptr;
+    std::function<void(float_t)> m_pFloatFunc = nullptr;
+    std::function<void(std::string)> m_pStringFunc = nullptr;
     std::function<void(std::vector<char>)> m_pBoolsFunc = nullptr;
     std::string m_callerName = "";
     bool* m_pIsDeviceAuthorised;
@@ -74,15 +74,18 @@ private:
 class ControlCallback {
 public:
     virtual void update() = 0;
+    virtual BLECharacteristic* getCharacteristic() = 0;
 };
+
+// --------------------------------------------------------------------------------------------------------------------
 
 class IntervalControl : public ControlCallback {
 public:
     IntervalControl() = default;
-    void setup(BLECharacteristic* bleCharacteristic, const uint16_t checkDelaySeconds, std::function<void(bool)> onIntervalToggle);
     void update() override { checkIntervalChange(); }
+    BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
     CharacteristicCallback* setCallback(const std::string charDescription, bool* isDeviceAuthorised);
-    BLECharacteristic* getCharacteristic() { return m_bleCharacteristic; };
+    void setup(BLECharacteristic* bleCharacteristic, const uint16_t checkDelaySeconds, std::function<void(bool)> onIntervalToggle);
 private:
     void checkIntervalChange();
     ESP32Time espClock;
@@ -93,11 +96,21 @@ private:
     uint32_t m_lastNotificationTimeStamp;
 };
 
+// --------------------------------------------------------------------------------------------------------------------
+
 class ClockControl : public ControlCallback {
 public:
+    ClockControl() = default;
     void update() override { updateTime(); }
+    BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
+    CharacteristicCallback* setCallback(const std::string charDescription, bool* isDeviceAuthorised);
+    void setup(BLECharacteristic* bleCharacteristic, const uint16_t notifyDelaySeconds, uint32_t initialValue);
 private:
     void updateTime();
+    ESP32Time espClock;
+    BLECharacteristic* m_bleCharacteristic;
+    uint16_t m_notifyDelaySeconds;
+    uint32_t m_lastNotificationTimeStamp;
 };
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -105,9 +118,6 @@ private:
 class EspBleControls {
 public:
     EspBleControls(const std::string deviceName, const uint32_t passkey = 0);
-
-    // bool isConnected();
-    // bool isAuthorised();
     void startService();
     void clearPrefs();
     void loopCallbacks();
@@ -115,11 +125,10 @@ public:
     //A control that displays the microcontroller RTC value. Data is sent as long, received as long (unix epoch time).
     //It can have only one instance, and it's reccomended to have a method to set the RTC of the microcontroller onValueReceived.
     //If onValueReceived function is nullptr then the value will be read only.
-    BLECharacteristic* createClockControl(
+    ClockControl* createClockControl(
         const std::string description,
         uint32_t initialValue,
-        const boolean shouldNotify,
-        void (onTimeSet)(const uint32_t)
+        uint16_t notifyDelaySeconds
     );
     
     //A switch where data is sent and received as string with the values "ON"/"OFF"
@@ -128,7 +137,7 @@ public:
         const std::string description,
         const std::string initialValue,
         const boolean shouldNotify,
-        void (onSwitchToggle)(const std::string)
+        std::function<void(std::string)> onSwitchToggle
     );
     
     //A momentary button, sends "ON" if NO or "OFF" if NC when pressed and "OFF" if NO and "ON" if NC when released.
@@ -138,7 +147,7 @@ public:
         const std::string description,
         const std::string initialValue,
         const boolean shouldNotify,
-        void (onButtonPressed)(const std::string)
+        std::function<void(std::string)> onButtonPressed
     );
     
     //A slider for int values between -32767 and 32767. The steps will divide the slider and the cursor will jump to these values.
@@ -151,7 +160,7 @@ public:
         const uint16_t steps,
         const int initialValue,
         const boolean shouldNotify,
-        void (onSliderMoved)(const int32_t)
+        std::function<void(int32_t)> onSliderMoved
     );
     
     //Will display a text field with an integer value. If the minimum and maximum values are set to 0 the value will be unconstrained (32 bits).
@@ -162,7 +171,7 @@ public:
         const short maxValue,
         const int initialValue,
         const boolean shouldNotify,
-        void (onValueReceived)(const int32_t)
+        std::function<void(int32_t)> onIntReceived
     );
     
     //Will display a text field with a float value. The minimum and maximum values are integers but will be displayed as floats.
@@ -174,7 +183,7 @@ public:
         const short maxValue,
         const float_t initialValue, 
         const boolean shouldNotify,
-        void (onValueReceived)(const float_t)
+        std::function<void(float_t)> onFloatReceived
     );
     
     //Will display a text field where text length can be constrained between 0 and 512 characters.
@@ -185,7 +194,7 @@ public:
         const uint16_t maxLength,
         const std::string initialValue,
         const boolean shouldNotify,
-        void (onValueReceived)(const std::string)
+        std::function<void(std::string)> onTextReceived
     );
     
     //A control that displays and sets an angle with integer values from 0 to 359.
@@ -196,7 +205,7 @@ public:
         const uint32_t initialValue,
         const boolean isCompass,
         const boolean shouldNotify,
-        void (onAngleChanged)(const uint32_t)
+        std::function<void(uint32_t)> onAngleChanged
     );
     
     //A control to set a color in RGB format. Sends and receives a string representing the hexadecimal value of the color.
@@ -205,7 +214,7 @@ public:
         const std::string description,
         const std::string initialValue,
         const boolean shouldNotify,
-        void (onColorChanged)(const std::string)
+        std::function<void(std::string)> onColorChanged
     );
     
     //24 hours ON/OFF interval setter with binary value for each division.
@@ -232,7 +241,7 @@ private:
     const uint16_t getCharIndex(const std::string charId);
     const boolean characteristicCounterExists(const std::string charId);
     std::map<std::string, uint16_t> m_charsCounter;
-    std::vector<ControlCallback*> m_controlsCallbacks;
+    std::map<std::string, ControlCallback*> m_controls;
     uint32_t m_pin;
     bool m_isDeviceAuthorised;
     bool m_isDeviceConnected;
