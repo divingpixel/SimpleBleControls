@@ -19,15 +19,27 @@ First parameter is the name that will be displayed for the device, and second is
 
 Then add the controls that you need.
 ## For now possible controls are:
+
+![Clock control](/media/clock.png "Clock control")
 * Clock control : to set and observe the time from the microcontroller RTC (internal or external)
+![Switch control](/media/switch.png "Switch control")
 * Switch control : a switch (ON/OFF)
+![Momentary button control](/media/momentary.png "Momentary button control")
 * Momentary control : a switch, but momentary
+![Slider control](/media/slider.png "Slider control")
 * Slider control : a slider, to set an integer value between two limits. Sadly it's limited to a Short range.
+![Integer control](/media/integer.png "Integer control")
 * Integer control : a text input where an integer can be set. Again if the limits are set, only Shorts can be sent, but without limits a 32bit int can be used.
+![Float control](/media/float.png "Float control")
 * Float control : like the integer, with the same limitations, but for floats.
+![String control](/media/string.png "String control")
 * String control : a text input box, that can be limited to a certain number of chars (less than 512).
+![Angle control](/media/angle.png "Angle control")
+![Compass control](/media/compass.png "Compass control")
 * Angle control : a nice touch input that can set a value between 0..359, integer.
+![Color control](/media/color.png "Color control")
 * Color control : again a nice interface to generate a color and returns the RGB in hex format.
+![Interval control](/media/interval.png "Interval control")
 * Interval control : sofisticated interface to set on/off intervals in the 24 hours loop.
 
 The methods have a small documentation also, just in case you need it (you will).
