@@ -12,6 +12,7 @@ BLECharacteristic* angleChar;
 BLECharacteristic* momentChar;
 BLECharacteristic* colorChar;
 
+// The initialTime should be initialised with the value retrieved from a rtc module if it exists
 const uint32_t initialTime = 1729800000UL;
 EspBleControls* controls;
 
@@ -27,9 +28,10 @@ void setup() {
 
   pinMode(LIGHT_PIN, OUTPUT);
 
-  controls = new EspBleControls("Kitchen Dimmer", 228378);
+  controls = new EspBleControls("Kitchen Controller", 228378);
 
-  controls->createClockControl("Clock Control", initialTime, 1);
+  controls->createClockControl("Clock Control", initialTime, 1, [](uint32_t value) -> void { printf("External rtc clock should be set to %i\n", value); });
+  controls->createIntervalControl("Interval controller", 288, 10, [](bool isOn) -> void { if (isOn) toggleLed("ON"); else toggleLed("OFF"); });
   switchChar = controls->createSwitchControl("Switch Control", "OFF", false, [](std::string value) -> void { toggleLed(value); });
   momentChar = controls->createMomentaryControl("Momentary Control", "OFF", false, [](std::string value) -> void { toggleLed(value); });
   sliderChar = controls->createSliderControl("Slider controller", -255, 255, 32, 0, false, [](int32_t value) -> void { /* do something with this value */ });
@@ -38,7 +40,6 @@ void setup() {
   stringChar = controls->createStringControl("Text controller", 128, "Text", false, [](std::string value) -> void { /* do something with this value */ });
   angleChar = controls->createAngleControl("Angle controller", 55, false, false, [](uint32_t value) -> void { /* do something with this value */ });
   colorChar = controls->createColorControl("Color controller", "FFFF00", false, [](std::string value) -> void { /* do something with this value */ });
-  controls->createIntervalControl("Interval controller", 288, 10, [](bool isOn) -> void { if (isOn) toggleLed("ON"); else toggleLed("OFF"); });
 
   controls->startService();
 }

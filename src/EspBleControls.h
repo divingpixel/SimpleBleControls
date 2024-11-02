@@ -21,6 +21,12 @@
 // The last part, let's call it CID, helps the app identify the control type
 // The last byte is 0x00 but in case of multiple controls of the same type the last byte should represent the number of instances
 
+#define PREFIX 0
+#define PARAM1 1
+#define PARAM2 2
+#define PARAM3 3
+#define SUFFIX 4
+
 #define CHAR_UUID_PREFIX       "e5932b1e"
 
 #define CLOCK_UUID_SUFFIX      "636c6f636b" // ID-updateInterval-0000-0000-CID+count
@@ -104,13 +110,14 @@ public:
     void update() override { updateTime(); }
     BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
     CharacteristicCallback* setCallback(const std::string charDescription, bool* isDeviceAuthorised);
-    void setup(BLECharacteristic* bleCharacteristic, const uint16_t notifyDelaySeconds, uint32_t initialValue);
+    void setup(BLECharacteristic* bleCharacteristic, const uint16_t notifyDelaySeconds, uint32_t initialValue, std::function<void(uint32_t)> onTimeSet);
 private:
     void updateTime();
     ESP32Time espClock;
     BLECharacteristic* m_bleCharacteristic;
     uint16_t m_notifyDelaySeconds;
     uint32_t m_lastNotificationTimeStamp;
+    std::function<void(uint32_t)> m_onTimeSet;
 };
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -128,7 +135,8 @@ public:
     ClockControl* createClockControl(
         const std::string description,
         uint32_t initialValue,
-        uint16_t notifyDelaySeconds
+        uint16_t notifyDelaySeconds,
+        std::function<void(uint32_t)> onTimeSet
     );
     
     //A switch where data is sent and received as string with the values "ON"/"OFF"
@@ -237,6 +245,7 @@ private:
     );
     void setBleSecurity();
     void startAdvertising();
+    void restoreValue(BLECharacteristic* characteristic, const std::string uuid, CharacteristicCallback* callback);
     const std::string generateCharUuid(const std::string suffix, const int16_t val1, const int16_t val2, const int16_t val3);
     const uint16_t getCharIndex(const std::string charId);
     const boolean characteristicCounterExists(const std::string charId);
