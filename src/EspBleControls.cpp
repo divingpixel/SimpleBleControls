@@ -475,10 +475,10 @@ void EspBleControls::notifyOnConnection(){
 };
 
 void EspBleControls::startService() {
+    createClearPrefsAndResetControl();
     m_pService->start();
     startAdvertising();
     if (m_pin != 0) setBleSecurity();
-    createClearPrefsAndResetControl();
 }
 
 void EspBleControls::updateControls() {
