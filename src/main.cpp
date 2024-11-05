@@ -3,47 +3,35 @@
 
 #define LIGHT_PIN 21
 
-BLECharacteristic* switchChar;
-BLECharacteristic* sliderChar;
-BLECharacteristic* stringChar;
-BLECharacteristic* intChar;
-BLECharacteristic* floatChar;
-BLECharacteristic* angleChar;
-BLECharacteristic* momentChar;
-BLECharacteristic* colorChar;
-
-// The initialTime should be initialised with the value retrieved from a rtc module if it exists
-const uint32_t initialTime = 1729800000UL;
+// The initialTime should be initialised in setup() with the value retrieved from a rtc module if it exists
+const uint32_t initialTime = 1730000000UL;
 EspBleControls* controls;
-
-void toggleLed(std::string value) {
-  if (value == "ON") {
-    digitalWrite(LIGHT_PIN, HIGH);
-  } else {
-    digitalWrite(LIGHT_PIN, LOW);
-  }
-};
+Publisher<std::string> isLightOn;
+Publisher<int32_t> intValue;
 
 void setup() {
 
   pinMode(LIGHT_PIN, OUTPUT);
+  isLightOn.doOnSet([](std::string value) -> void { digitalWrite(LIGHT_PIN, (value == "ON") ? HIGH : LOW); });
 
   controls = new EspBleControls("Kitchen Controller", 228378);
+  // controls->clearPrefs(); 
 
-  controls->createClockControl("Clock Control", initialTime, 1, [](uint32_t value) -> void { printf("External rtc clock should be set to %i\n", value); });
-  controls->createIntervalControl("Interval controller", 288, 10, [](bool isOn) -> void { if (isOn) toggleLed("ON"); else toggleLed("OFF"); });
-  switchChar = controls->createSwitchControl("Switch Control", "OFF", false, [](std::string value) -> void { toggleLed(value); });
-  momentChar = controls->createMomentaryControl("Momentary Control", "OFF", false, [](std::string value) -> void { toggleLed(value); });
-  sliderChar = controls->createSliderControl("Slider controller", -255, 255, 32, 0, false, [](int32_t value) -> void { /* do something with this value */ });
-  intChar = controls->createIntControl("Integer controller", -512, 512, 456, false, [](int32_t value) -> void { /* do something with this value */ });
-  floatChar = controls->createFloatControl("Float controller", -255, 255, 123.45, false, [](float_t value) -> void { /* do something with this value */ });
-  stringChar = controls->createStringControl("Text controller", 128, "Text", false, [](std::string value) -> void { /* do something with this value */ });
-  angleChar = controls->createAngleControl("Angle controller", 55, false, false, [](uint32_t value) -> void { /* do something with this value */ });
-  colorChar = controls->createColorControl("Color controller", "FFFF00", false, [](std::string value) -> void { /* do something with this value */ });
+  controls->createClockControl("Clock Control", initialTime, 1, [](uint32_t value) -> void { });
+  controls->createIntervalControl("Interval controller", 288, 10, [](bool isOn) -> void { isLightOn.setValue((isOn) ? "ON" : "OFF", nullptr); });
+  controls->createSwitchControl("Switch Control", "OFF", &isLightOn, nullptr /* [](std::string value) -> void { toggleLed(value); } */);
+  controls->createMomentaryControl("Momentary Control", "OFF", &isLightOn, nullptr /* [](std::string value) -> void { toggleLed(value); } */);
+  controls->createSliderControl("Slider controller", -255, 255, 32, 0, &intValue, [](int32_t value) -> void { });
+  controls->createIntControl("Integer controller", -512, 512, 0, &intValue, [](int32_t value) -> void { });
+
+  controls->createFloatControl("Float controller", -255, 255, 123.45, false, [](float_t value) -> void { });
+  controls->createStringControl("Text controller", 128, "Text", false, [](std::string value) -> void { });
+  controls->createAngleControl("Angle controller", 55, false, false, [](uint32_t value) -> void { });
+  controls->createColorControl("Color controller", "FFFF00", false, [](std::string value) -> void { });
 
   controls->startService();
 }
 
 void loop() {
-  controls->loopCallbacks();
+  controls->updateControls();
 }

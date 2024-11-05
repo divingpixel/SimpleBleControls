@@ -7,7 +7,10 @@
 #include <BLE2902.h>
 #include <Arduino.h>
 #include <ESP32Time.h>
+#include <bitset>
 #include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #define SERVICE_UUID    "e5932b1e-c0de-da7a-7472-616e73666572" // SHOULD USE THIS SERVICE UUID OTHERWISE THE APP WILL FILTER OUT THE DEVICE
 #define PREFERENCES_ID  "control_values"
@@ -26,11 +29,13 @@
 #define PARAM2 2
 #define PARAM3 3
 #define SUFFIX 4
+#define CHARID 5
 
 #define CHAR_UUID_PREFIX       "e5932b1e"
 
+#define CLRPF_UUID_SUFFIX      "636c727066" // a switch used for the hidden clear preferences control
 #define CLOCK_UUID_SUFFIX      "636c6f636b" // ID-updateInterval-0000-0000-CID+count
-#define INTRV_UUID_SUFFIX      "696e747276" // ID-divisions-0000-0000-CID+count -> divisions multiple of 24, min 24, max 1440
+#define INTRV_UUID_SUFFIX      "696e747276" // ID-divisions-updateInterval-0000-CID+count -> divisions multiple of 24, min 24, max 1440
 #define SWTCH_UUID_SUFFIX      "7377746368" // ID-0000-0000-0000-CID+count
 #define SLIDR_UUID_SUFFIX      "736c696472" // ID-minValue-maxValue-steps-CID+count -> min/max between -32767..32767
 #define STRNG_UUID_SUFFIX      "7374726e67" // ID-size-0000-0000-CID+count -> size between 1..512
@@ -39,14 +44,6 @@
 #define ANGLE_UUID_SUFFIX      "616e676c65" // ID-isCompass-0000-0000-CID+count
 #define MOMNT_UUID_SUFFIX      "6d6f6d6e74" // ID-0000-0000-0000-CID+count
 #define COLOR_UUID_SUFFIX      "636f6c6f72" // ID-0000-0000-0000-CID+count
-
-//TODO remove these after interval complete
-const bool hasTimePassed(uint32_t fromTimeStamp, uint16_t durationSeconds);
-const int getIntervalIndex(uint32_t currentTime, uint16_t dayDivisions);
-
-// --------------------------------------------------------------------------------------------------------------------
-
-//TODO here the Observer classes
 
 // --------------------------------------------------------------------------------------------------------------------
 
@@ -62,10 +59,16 @@ public:
     void executeCallback(BLECharacteristic* pChar, bool saveValues);
 
     void onWrite(BLECharacteristic* pChar) override {
-         if (*m_pIsDeviceAuthorised) executeCallback(pChar, true);
+        if (*m_pIsDeviceAuthorised) executeCallback(pChar, true);
     }
 
 private: 
+    struct SaveDataParams {
+        BLECharacteristic* pChar;
+        char type;
+    } m_saveDataParams;
+    static void saveValues(void* params);
+    TaskHandle_t saveValuesTask = NULL;
     std::function<void(uint32_t)> m_pUIntFunc = nullptr;
     std::function<void(int32_t)> m_pIntFunc= nullptr;
     std::function<void(float_t)> m_pFloatFunc = nullptr;
@@ -77,47 +80,134 @@ private:
 
 // --------------------------------------------------------------------------------------------------------------------
 
-class ControlCallback {
+class BLEControl {
 public:
     virtual void update() = 0;
+    virtual void setCharacteristic(BLECharacteristic* bleCharacteristic) = 0;
     virtual BLECharacteristic* getCharacteristic() = 0;
+    virtual CharacteristicCallback* getCallback() = 0;
+};
+
+template <typename T>
+class Publisher {
+private:
+    std::vector<BLEControl*> observers;
+    T m_value;
+    std::function<void(T)> m_action;
+    BLEControl* m_sender;
+    
+public:
+    void subscribe(BLEControl* observer) {
+        observers.push_back(observer);
+        observer->update();
+    }
+
+    T getValue() {
+        return m_value;
+    }
+
+    void doOnSet(std::function<void(T)> action) {
+        m_action = action;
+    }
+
+    void setValue(T value, BLEControl* sender) {
+        if (value != m_value) {
+            m_value = value;
+            m_sender = sender;
+            for (BLEControl* observer : observers) {
+                if(observer != m_sender) observer->update();
+            }
+            if (m_action != nullptr) m_action(value);
+            //printf ("Publisher : Received value from %i -> Updating observers done!\n", m_sender);
+        }
+    }
 };
 
 // --------------------------------------------------------------------------------------------------------------------
 
-class IntervalControl : public ControlCallback {
+class IntervalControl : public BLEControl {
 public:
-    IntervalControl() = default;
+    IntervalControl(std::string description, const uint16_t checkDelaySeconds, bool* isDeviceAuthorised, std::function<void(bool)> onIntervalToggle);
     void update() override { checkIntervalChange(); }
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    void setCharacteristic(BLECharacteristic* bleCharacteristic) override { m_bleCharacteristic = bleCharacteristic; };
     BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
-    CharacteristicCallback* setCallback(const std::string charDescription, bool* isDeviceAuthorised);
-    void setup(BLECharacteristic* bleCharacteristic, const uint16_t checkDelaySeconds, std::function<void(bool)> onIntervalToggle);
 private:
     void checkIntervalChange();
+    std::string m_description;
     ESP32Time espClock;
     BLECharacteristic* m_bleCharacteristic;
     std::vector<char> m_intervals;
+    bool* m_isDeviceAuthorised;
     uint16_t m_checkDelaySeconds;
+    uint32_t m_lastUpdateTimeStamp;
     std::function<void(bool)> m_onIntervalToggle;
-    uint32_t m_lastNotificationTimeStamp;
+    std::function<void(std::vector<char>)> m_callback;
 };
 
 // --------------------------------------------------------------------------------------------------------------------
 
-class ClockControl : public ControlCallback {
+class ClockControl : public BLEControl {
 public:
-    ClockControl() = default;
+    ClockControl(std::string description, uint32_t initialValue, const uint16_t notifyDelaySeconds, bool* isDeviceAuthorised, std::function<void(uint32_t)> onTimeSet);
     void update() override { updateTime(); }
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    void setCharacteristic(BLECharacteristic* bleCharacteristic) override { m_bleCharacteristic = bleCharacteristic; };
     BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
-    CharacteristicCallback* setCallback(const std::string charDescription, bool* isDeviceAuthorised);
-    void setup(BLECharacteristic* bleCharacteristic, const uint16_t notifyDelaySeconds, uint32_t initialValue, std::function<void(uint32_t)> onTimeSet);
 private:
     void updateTime();
+    std::string m_description;
     ESP32Time espClock;
     BLECharacteristic* m_bleCharacteristic;
     uint16_t m_notifyDelaySeconds;
+    uint32_t m_lastUpdateTimeStamp;
+    bool* m_isDeviceAuthorised;
+    std::function<void(uint32_t)> m_onTimeSet, m_callback;
+};
+
+// --------------------------------------------------------------------------------------------------------------------
+
+class BooleanControl : public BLEControl {
+public:
+    BooleanControl(const std::string charDescription, Publisher<std::string>* publisher, bool* isDeviceAuthorised, std::function<void(std::string)> onChange);
+    void update() override { updateControl(); };
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    void setCharacteristic(BLECharacteristic* bleCharacteristic) override { 
+        m_bleCharacteristic = bleCharacteristic;
+        if (m_publisher != nullptr) m_publisher->subscribe(this); 
+    };
+    BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
+ private:
+    void updateControl();
+    std::string m_description;
+    BLECharacteristic* m_bleCharacteristic;
+    Publisher<std::string>* m_publisher;
+    std::string m_initialValue;
     uint32_t m_lastNotificationTimeStamp;
-    std::function<void(uint32_t)> m_onTimeSet;
+    bool* m_isDeviceAuthorised;
+    std::function<void(std::string)> m_onChange, m_callback;
+};
+
+// --------------------------------------------------------------------------------------------------------------------
+
+class IntControl : public BLEControl {
+public:
+    IntControl(const std::string charDescription, Publisher<int32_t>* publisher, bool* isDeviceAuthorised, std::function<void(int32_t)> onChange);
+    void update() override { updateControl(); };
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    void setCharacteristic(BLECharacteristic* bleCharacteristic) override { 
+        m_bleCharacteristic = bleCharacteristic;
+        if (m_publisher != nullptr) m_publisher->subscribe(this); 
+    };
+    BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
+ private:
+    void updateControl();
+    std::string m_description;
+    BLECharacteristic* m_bleCharacteristic;
+    Publisher<int32_t>* m_publisher;
+    uint32_t m_lastNotificationTimeStamp;
+    bool* m_isDeviceAuthorised;
+    std::function<void(int32_t)> m_onChange, m_callback;
 };
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -127,11 +217,11 @@ public:
     EspBleControls(const std::string deviceName, const uint32_t passkey = 0);
     void startService();
     void clearPrefs();
-    void loopCallbacks();
+    void updateControls();
 
     //A control that displays the microcontroller RTC value. Data is sent as long, received as long (unix epoch time).
     //It can have only one instance, and it's reccomended to have a method to set the RTC of the microcontroller onValueReceived.
-    //If onValueReceived function is nullptr then the value will be read only.
+    //If onTimeSet function is nullptr then the value will be read only.
     ClockControl* createClockControl(
         const std::string description,
         uint32_t initialValue,
@@ -140,45 +230,45 @@ public:
     );
     
     //A switch where data is sent and received as string with the values "ON"/"OFF"
-    //If onValueReceived function is nullptr then the value will be read only.
-    BLECharacteristic* createSwitchControl(
+    //If onSwitchToggle function is nullptr then the value will be read only.
+    BooleanControl* createSwitchControl(
         const std::string description,
         const std::string initialValue,
-        const boolean shouldNotify,
+        Publisher<std::string>* publisher,
         std::function<void(std::string)> onSwitchToggle
     );
     
     //A momentary button, sends "ON" if NO or "OFF" if NC when pressed and "OFF" if NO and "ON" if NC when released.
     //Initial value determines if is NO or NC. If the initial value is "OFF" it will be NO and NC if is "ON".
     //If onValueReceived function is nullptr then the value will be read only.
-    BLECharacteristic* createMomentaryControl(
+    BooleanControl* createMomentaryControl(
         const std::string description,
         const std::string initialValue,
-        const boolean shouldNotify,
+        Publisher<std::string>* publisher,
         std::function<void(std::string)> onButtonPressed
     );
     
     //A slider for int values between -32767 and 32767. The steps will divide the slider and the cursor will jump to these values.
     //For fine control leave the steps to 0.
     //If onValueReceived function is nullptr then the value will be read only. I can't think of a use case for this but ... it is what it is.
-    BLECharacteristic* createSliderControl(
+    IntControl* createSliderControl(
         const std::string description,
         const short minValue,
         const short maxValue,
         const uint16_t steps,
         const int initialValue,
-        const boolean shouldNotify,
+        Publisher<int32_t>* publisher,
         std::function<void(int32_t)> onSliderMoved
     );
     
     //Will display a text field with an integer value. If the minimum and maximum values are set to 0 the value will be unconstrained (32 bits).
     //If onValueReceived function is nullptr then the value will be read only.
-    BLECharacteristic* createIntControl(
+    IntControl* createIntControl(
         const std::string description,
         const short minValue,
         const short maxValue,
         const int initialValue,
-        const boolean shouldNotify,
+        Publisher<int32_t>* publisher,
         std::function<void(int32_t)> onIntReceived
     );
     
@@ -250,10 +340,13 @@ private:
     const uint16_t getCharIndex(const std::string charId);
     const boolean characteristicCounterExists(const std::string charId);
     std::map<std::string, uint16_t> m_charsCounter;
-    std::map<std::string, ControlCallback*> m_controls;
+    std::map<std::string, BLEControl*> m_selfUpdatingControls;
+    std::map<std::string, BLEControl*> m_notifyingControls;
     uint32_t m_pin;
+    uint32_t m_deviceConnectionTimeStamp;
     bool m_isDeviceAuthorised;
     bool m_isDeviceConnected;
+    bool m_shouldNotifyDevice;
     BLEServer* m_pServer;
     BLEService* m_pService;
 };
@@ -268,18 +361,18 @@ class ServerCallback : public BLEServerCallbacks {
 
     void onDisconnect(BLEServer* pServer) {
         m_onDeviceConnection(false);
-        m_onDeviceAuthentication(false);
         printf("ServerCallback - Device Disconnected\n");
         vTaskDelay(500);
         BLEDevice::startAdvertising();
     }
 
 public:
-    ServerCallback(std::function<void(bool)> onDeviceConnection, std::function<void(bool)> onDeviceAuthentication);
+    ServerCallback(std::function<void(bool)> onDeviceConnection){
+       m_onDeviceConnection = onDeviceConnection;
+    };
 
 private:
     std::function<void(bool)> m_onDeviceConnection;
-    std::function<void(bool)> m_onDeviceAuthentication;
 };
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -307,17 +400,17 @@ class SecurityCallback : public BLESecurityCallbacks {
         } else {
             m_onDeviceAuthentication(false);
             printf("SecurityCallback - Authentication Failure\n");
-            m_pServer->removePeerDevice(m_pServer->getConnId(), true);
             vTaskDelay(500);
             BLEDevice::startAdvertising();
         }
     };
 
 public:
-    SecurityCallback(std::function<void(bool)> onDeviceAuthentication, BLEServer* pServer);
+    SecurityCallback(std::function<void(bool)> onDeviceAuthentication){
+        m_onDeviceAuthentication = onDeviceAuthentication;
+    };
 
 private:
-    BLEServer* m_pServer;
     std::function<void(bool)> m_onDeviceAuthentication;
 };
 
