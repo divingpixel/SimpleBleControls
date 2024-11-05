@@ -113,7 +113,6 @@ const bool isNotSaveExcluded(std::string controlId) {
 
 const char CharacteristicCallback::getValueType() {
     if (m_pIntFunc != nullptr) return 'i';
-    if (m_pUIntFunc != nullptr) return 'u';
     if (m_pFloatFunc != nullptr) return 'f';
     if (m_pStringFunc != nullptr) return 's';
     if (m_pBoolsFunc != nullptr) return 'b';
@@ -131,31 +130,26 @@ void CharacteristicCallback::saveValues(void* params) {
         if (data->type == 'f') {
             float_t floatValue = bytesToFloat(m_byteArray);
             m_preferences.putFloat(controlId.c_str(), floatValue);
-            printf("Saved %g float to %s\n", m_preferences.getFloat(controlId.c_str()), controlId.c_str());
-        }
-        if (data->type == 'u') {
-            uint32_t intValue = bytesToIntegerType<uint32_t>(m_byteArray);
-            m_preferences.putUInt(controlId.c_str(), intValue);
-            printf("Saved %i Uint to %s\n", m_preferences.getUInt(controlId.c_str()), controlId.c_str());
+            //printf("Saved %g float to %s\n", m_preferences.getFloat(controlId.c_str()), controlId.c_str());
         }
         if (data->type == 'i') {
             int32_t intValue = bytesToIntegerType<int32_t>(m_byteArray);
             m_preferences.putInt(controlId.c_str(), intValue);
-            printf("Saved %i int to %s\n", m_preferences.getInt(controlId.c_str()), controlId.c_str());
+            //printf("Saved %i int to %s\n", m_preferences.getInt(controlId.c_str()), controlId.c_str());
         }
         if (data->type == 's') {
             std::string stringValue = data->pChar->getValue();
             m_preferences.putString(controlId.c_str(), stringValue.c_str());
             uint8_t savedStringValue[512];
             m_preferences.getString(controlId.c_str(), (char*)&savedStringValue[0], sizeof(savedStringValue));
-            printf("Saved %s string to %s\n", (char*)savedStringValue, controlId.c_str());
+            //printf("Saved %s string to %s\n", (char*)savedStringValue, controlId.c_str());
         }
         if (data->type == 'b') {
             size_t m_dataSize = data->pChar->getLength();
             m_preferences.putBytes(controlId.c_str(), m_byteArray, m_dataSize);
             uint8_t savedValue[m_dataSize];
             m_preferences.getBytes(controlId.c_str(), savedValue, m_dataSize);
-            printf("Saved %s bytes to %s\n", bytesToConsole(savedValue, m_dataSize).c_str(), controlId.c_str());
+            //printf("Saved %s bytes to %s\n", bytesToConsole(savedValue, m_dataSize).c_str(), controlId.c_str());
         }
         m_preferences.end();
     }
@@ -164,24 +158,12 @@ void CharacteristicCallback::saveValues(void* params) {
 
 void CharacteristicCallback::executeCallback(BLECharacteristic* pChar, bool shouldSaveValues = false) {
     if (m_pFloatFunc != nullptr) m_pFloatFunc(bytesToFloat(pChar->getData()));
-    if (m_pUIntFunc != nullptr) m_pUIntFunc(bytesToIntegerType<uint32_t>(pChar->getData()));
     if (m_pIntFunc != nullptr) m_pIntFunc(bytesToIntegerType<int32_t>(pChar->getData()));
     if (m_pStringFunc != nullptr) m_pStringFunc(pChar->getValue());
     if (m_pBoolsFunc != nullptr) m_pBoolsFunc(bytesToBools(pChar->getData(), pChar->getLength()));
     m_saveDataParams = { pChar, getValueType() };
     if (shouldSaveValues) xTaskCreate(saveValues, "saveValues", 8192, (void *) &m_saveDataParams, 10, &saveValuesTask);
 }
-
-CharacteristicCallback::CharacteristicCallback(
-    std::function<void(uint32_t)> func = nullptr,
-    const std::string charDescription = "intCharId",
-    bool* isDeviceAuthorised = nullptr
-) {
-    m_pUIntFunc = func;
-    m_callerName = charDescription;
-    m_pIsDeviceAuthorised = isDeviceAuthorised;
-    m_saveDataParams = {nullptr, 'x'};
-};
 
 CharacteristicCallback::CharacteristicCallback(
     std::function<void(int32_t)> func = nullptr,
@@ -242,15 +224,15 @@ IntervalControl::IntervalControl(
     m_callback = [&](std::vector<char> intervals){
          m_intervals = intervals;
          m_lastUpdateTimeStamp = millis() - m_checkDelaySeconds * 1000;
-         checkIntervalChange();
+         update();
     };
 }
 
-void IntervalControl::checkIntervalChange() {
+void IntervalControl::update() {
     if (m_checkDelaySeconds != 0 && hasTimePassed(m_lastUpdateTimeStamp, m_checkDelaySeconds)) {
         if (m_onIntervalToggle != nullptr && (m_intervals.size() >= DAY_HOURS)) {
             size_t intervalIndex = getIntervalIndex(espClock.getEpoch(), m_intervals.size());
-            printf ("Interval %i is %i\n", intervalIndex, m_intervals[intervalIndex]);
+            //printf ("Interval %i is %i\n", intervalIndex, m_intervals[intervalIndex]);
             m_onIntervalToggle(m_intervals[intervalIndex] == 1);
         }
         m_lastUpdateTimeStamp = millis();
@@ -273,12 +255,12 @@ ClockControl::ClockControl(
     m_callback = [&](uint32_t time) { 
         espClock.setTime(time);
         m_onTimeSet(time);
-        updateTime();
+        update();
     };
     espClock.setTime(initialValue);
 }
 
-void ClockControl::updateTime() {
+void ClockControl::update() {
     if (m_notifyDelaySeconds != 0 && hasTimePassed(m_lastUpdateTimeStamp, m_notifyDelaySeconds)) {
       uint32_t timeValue = espClock.getEpoch();
       m_bleCharacteristic->setValue(timeValue);
@@ -300,16 +282,16 @@ BooleanControl::BooleanControl(
     m_isDeviceAuthorised = isDeviceAuthorised;
     m_onChange = onChange;
     m_callback = [&](std::string value) {
-        printf("%s setCallback received %s\n", m_description.c_str(), value.c_str());
+        //printf("%s setCallback received %s\n", m_description.c_str(), value.c_str());
         if (m_onChange != nullptr) m_onChange(value);
         if (m_publisher != nullptr) m_publisher->setValue(value, this);
     };
 }
 
-void BooleanControl::updateControl() {
+void BooleanControl::update() {
     if (m_publisher != nullptr && m_bleCharacteristic != nullptr){
         std::string currentValue = (m_publisher->getValue().length() > 0) ? m_publisher->getValue() : "OFF";
-        printf("%s updateControl received %s\n", m_description.c_str(), currentValue.c_str());
+        //printf("%s updateControl received %s\n", m_description.c_str(), currentValue.c_str());
         m_bleCharacteristic->setValue(currentValue);
         if (*m_isDeviceAuthorised) m_bleCharacteristic->notify();
         m_lastNotificationTimeStamp = millis();
@@ -329,16 +311,16 @@ IntControl::IntControl(
     m_isDeviceAuthorised = isDeviceAuthorised;
     m_onChange = onChange;
     m_callback = [&](int32_t value) {
-        printf("%s setCallback received %i\n", m_description.c_str(), value);
+        //printf("%s setCallback received %i\n", m_description.c_str(), value);
         if (m_onChange != nullptr) m_onChange(value);
         if (m_publisher != nullptr) m_publisher->setValue(value, this);
     };
 }
 
-void IntControl::updateControl() {
+void IntControl::update() {
     if (m_publisher != nullptr && m_bleCharacteristic != nullptr) {
         int currentValue = m_publisher->getValue();
-        printf("%s updateControl received %i\n", m_description.c_str(), currentValue);
+        //printf("%s updateControl received %i\n", m_description.c_str(), currentValue);
         m_bleCharacteristic->setValue(currentValue);
         if (*m_isDeviceAuthorised) m_bleCharacteristic->notify();
         m_lastNotificationTimeStamp = millis();
@@ -346,6 +328,65 @@ void IntControl::updateControl() {
 }
 
 // --------------------------------------------------------------------------------------------------------------------
+
+FloatControl::FloatControl(
+        const std::string charDescription,
+        Publisher<float_t>* publisher,
+        bool* isDeviceAuthorised,
+        std::function<void(float_t)> onChange
+){
+    m_description = charDescription;
+    m_publisher = publisher;
+    m_isDeviceAuthorised = isDeviceAuthorised;
+    m_onChange = onChange;
+    m_callback = [&](float_t value) {
+        //printf("%s setCallback received %g\n", m_description.c_str(), value);
+        if (m_onChange != nullptr) m_onChange(value);
+        if (m_publisher != nullptr) m_publisher->setValue(value, this);
+    };
+}
+
+void FloatControl::update() {
+    if (m_publisher != nullptr && m_bleCharacteristic != nullptr) {
+        float_t currentValue = m_publisher->getValue();
+        //printf("%s updateControl received %g\n", m_description.c_str(), currentValue);
+        m_bleCharacteristic->setValue(currentValue);
+        if (*m_isDeviceAuthorised) m_bleCharacteristic->notify();
+        m_lastNotificationTimeStamp = millis();
+    }
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+
+StringControl::StringControl(
+        const std::string charDescription,
+        Publisher<std::string>* publisher,
+        bool* isDeviceAuthorised,
+        std::function<void(std::string)> onChange
+){
+    m_description = charDescription;
+    m_publisher = publisher;
+    m_isDeviceAuthorised = isDeviceAuthorised;
+    m_onChange = onChange;
+    m_callback = [&](std::string value) {
+        //printf("%s setCallback received %g\n", m_description.c_str(), value);
+        if (m_onChange != nullptr) m_onChange(value);
+        if (m_publisher != nullptr) m_publisher->setValue(value, this);
+    };
+}
+
+void StringControl::update() {
+    if (m_publisher != nullptr && m_bleCharacteristic != nullptr) {
+        std::string currentValue = m_publisher->getValue();
+        //printf("%s updateControl received %g\n", m_description.c_str(), currentValue);
+        m_bleCharacteristic->setValue(currentValue);
+        if (*m_isDeviceAuthorised) m_bleCharacteristic->notify();
+        m_lastNotificationTimeStamp = millis();
+    }
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+
 EspBleControls::EspBleControls(const std::string deviceName, const uint32_t passkey) {
 
     m_isDeviceConnected = false;
@@ -363,10 +404,7 @@ EspBleControls::EspBleControls(const std::string deviceName, const uint32_t pass
             [&](bool isDeviceAuthorised) -> void { 
                 m_isDeviceAuthorised = isDeviceAuthorised; 
                 if (!isDeviceAuthorised) m_pServer->removePeerDevice(m_pServer->getConnId(), true);
-                if (m_isDeviceAuthorised && m_isDeviceConnected) { //TODO move in a function
-                    m_shouldNotifyDevice = true;
-                    m_deviceConnectionTimeStamp = millis();
-                }
+                notifyOnConnection();
             }
         );
         BLEDevice::setSecurityCallbacks(secCallback);
@@ -377,29 +415,70 @@ EspBleControls::EspBleControls(const std::string deviceName, const uint32_t pass
         [&](bool isDeviceConnected) -> void { 
             m_isDeviceConnected = isDeviceConnected;
             if (!isDeviceConnected) m_isDeviceAuthorised = false;
-            if (m_isDeviceAuthorised && m_isDeviceConnected) { //TODO move in a function
-                m_shouldNotifyDevice = true;
-                m_deviceConnectionTimeStamp = millis();
-            }
+            notifyOnConnection();
         }
     );
     m_pServer->setCallbacks(serverCallback);
     m_pService = m_pServer->createService(BLEUUID(SERVICE_UUID), 127U, 0);
 }
 
+const std::string EspBleControls::generateCharUuid(const std::string suffix, const int16_t val1 = 0, const int16_t val2 = 0, const int16_t val3 = 0) {
+    std::string uuid = CHAR_UUID_PREFIX;
+    uuid.append("-");
+    uuid.append(shortToHex(val1));
+    uuid.append("-");
+    uuid.append(shortToHex(val2));
+    uuid.append("-");
+    uuid.append(shortToHex(val3));
+    uuid.append("-");
+    uuid.append(suffix);
+    uint16_t charCount = getCharCounterIndex(suffix) + 1;
+    uuid.append(intToString(charCount, 2, 16));
+    return uuid;
+}
+
+const uint16_t EspBleControls::getCharCounterIndex(const std::string charId) {
+    const std::map<std::string, uint16_t>::iterator charIterator = m_charsCounter.find(charId);
+    if (charIterator != m_charsCounter.end()) {
+        return m_charsCounter.at(charId);
+    } else {
+        m_charsCounter[charId] = 0;
+        return 0;
+    }
+}
+
+const boolean EspBleControls::doesCharCounterExists(const std::string charId) {
+    const std::map<std::string, uint16_t>::iterator charIterator = m_charsCounter.find(charId);
+    return charIterator != m_charsCounter.end();
+}
+
+void EspBleControls::createClearPrefsAndResetControl() {
+    std::function<void(int32_t)> action = [&](int32_t shouldClear) {
+        if (shouldClear == 1) {
+            Preferences m_preferences;
+            m_preferences.begin(PREFERENCES_ID, false);
+            m_preferences.clear();
+            m_preferences.end();
+        }
+        delay(1000);
+        esp_restart();
+    };
+    CharacteristicCallback* callback = new CharacteristicCallback(action , "Clear values", &m_isDeviceAuthorised);
+    createCharacteristic(generateCharUuid(CLRPF_UUID_SUFFIX), "Clear values", 0, false, callback);
+}
+
+void EspBleControls::notifyOnConnection(){
+    if (m_isDeviceAuthorised && m_isDeviceConnected) { 
+        m_shouldNotifyDevice = true;
+        m_deviceConnectionTimeStamp = millis();
+    }
+};
+
 void EspBleControls::startService() {
     m_pService->start();
     startAdvertising();
     if (m_pin != 0) setBleSecurity();
-}
-
-// TODO Method to disable this automatically after cleared -> create a control that will be hidden in Android and shown only in settings
-// that when set creates a key in prefs that when found clears the prefs (so after clear won't be found in prefs :) also to reset the device remotely? )
-void EspBleControls::clearPrefs() {
-    Preferences m_preferences;
-    m_preferences.begin(PREFERENCES_ID, false);
-    m_preferences.clear();
-    m_preferences.end();
+    createClearPrefsAndResetControl();
 }
 
 void EspBleControls::updateControls() {
@@ -408,7 +487,7 @@ void EspBleControls::updateControls() {
             control->second->update();
         };
     }
-    if (m_shouldNotifyDevice && hasTimePassed(m_deviceConnectionTimeStamp,10) && m_notifyingControls.size() > 0) {
+    if (m_shouldNotifyDevice && hasTimePassed(m_deviceConnectionTimeStamp, CHAR_NOTIFICATION_DELAY) && m_notifyingControls.size() > 0) {
         for (std::map<std::string, BLEControl*>::iterator control = m_notifyingControls.begin(); control != m_notifyingControls.end(); ++control) {
             control->second->update();
         };
@@ -510,44 +589,14 @@ template <typename ValueType> BLECharacteristic* EspBleControls::createCharacter
     return characteristic;
 };
 
-const std::string EspBleControls::generateCharUuid(const std::string suffix, const int16_t val1 = 0, const int16_t val2 = 0, const int16_t val3 = 0) {
-    std::string uuid = CHAR_UUID_PREFIX;
-    uuid.append("-");
-    uuid.append(shortToHex(val1));
-    uuid.append("-");
-    uuid.append(shortToHex(val2));
-    uuid.append("-");
-    uuid.append(shortToHex(val3));
-    uuid.append("-");
-    uuid.append(suffix);
-    uint16_t charCount = getCharIndex(suffix) + 1;
-    uuid.append(intToString(charCount, 2, 16));
-    return uuid;
-}
-
-const uint16_t EspBleControls::getCharIndex(const std::string charId) {
-    const std::map<std::string, uint16_t>::iterator charIterator = m_charsCounter.find(charId);
-    if (charIterator != m_charsCounter.end()) {
-        return m_charsCounter.at(charId);
-    } else {
-        m_charsCounter[charId] = 0;
-        return 0;
-    }
-}
-
-const boolean EspBleControls::characteristicCounterExists(const std::string charId) {
-    const std::map<std::string, uint16_t>::iterator charIterator = m_charsCounter.find(charId);
-    return charIterator != m_charsCounter.end();
-}
-
 ClockControl* EspBleControls::createClockControl(
     const std::string description,
     const uint32_t initialValue,
     uint16_t notifyDelaySeconds,
     std::function<void(uint32_t)> onTimeSet
 ) {
-    if (characteristicCounterExists(CLOCK_UUID_SUFFIX)) {
-        createStringControl(description, 256, "Only one Clock control instance can be created!", false, nullptr);
+    if (doesCharCounterExists(CLOCK_UUID_SUFFIX)) {
+        createStringControl(description, 256, "Only one Clock control instance can be created!", nullptr, nullptr);
         return nullptr;
     } else {
         const std::string newUuid = generateCharUuid(CLOCK_UUID_SUFFIX, notifyDelaySeconds);
@@ -556,6 +605,26 @@ ClockControl* EspBleControls::createClockControl(
         clockControl->setCharacteristic(bleCharacteristic);
         m_selfUpdatingControls[getCharParamValue(newUuid , SUFFIX)] = clockControl;
         return clockControl;
+    }
+}
+
+IntervalControl* EspBleControls::createIntervalControl(
+    const std::string description,
+    const uint16_t divisions,
+    const uint16_t checkDelaySeconds,
+    std::function<void(bool)> onIntervalToggle
+) {
+    if (doesCharCounterExists(CLOCK_UUID_SUFFIX)) {
+        const std::string newUuid = generateCharUuid(INTRV_UUID_SUFFIX, divisions, checkDelaySeconds);
+        const std::string initialValue(divisions / 8, 0);
+        IntervalControl* intervalControl = new IntervalControl(description, checkDelaySeconds, &m_isDeviceAuthorised, onIntervalToggle);
+        BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, false, intervalControl->getCallback());
+        intervalControl->setCharacteristic(bleCharacteristic);
+        m_selfUpdatingControls[getCharParamValue(newUuid , SUFFIX)] = intervalControl;
+        return intervalControl;
+    } else {
+        createStringControl(description, 256, "There is no Clock control defined!\nPlease add one before creating an Interval control!", nullptr, nullptr);
+        return nullptr;
     }
 }
 
@@ -569,7 +638,7 @@ BooleanControl* EspBleControls::createSwitchControl(
     BooleanControl* switchControl = new BooleanControl(description, publisher, &m_isDeviceAuthorised, onSwitchToggle);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, switchControl->getCallback());
     switchControl->setCharacteristic(bleCharacteristic);
-    m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = switchControl;
+    if (publisher != nullptr) m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = switchControl;
     return switchControl;
 }
 
@@ -583,7 +652,7 @@ BooleanControl* EspBleControls::createMomentaryControl(
     BooleanControl* momentaryControl = new BooleanControl(description, publisher, &m_isDeviceAuthorised, onButtonPressed);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, momentaryControl->getCallback());
     momentaryControl->setCharacteristic(bleCharacteristic);
-    m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = momentaryControl;
+    if (publisher != nullptr) m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = momentaryControl;
     return momentaryControl;
 }
 
@@ -598,9 +667,9 @@ IntControl* EspBleControls::createSliderControl(
 ) {
     const std::string newUuid = generateCharUuid(SLIDR_UUID_SUFFIX, minValue, maxValue, steps);
     IntControl* sliderControl = new IntControl(description, publisher, &m_isDeviceAuthorised, onSliderMoved);
-    BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, /* publisher != nullptr */ false, sliderControl->getCallback());
+    BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, sliderControl->getCallback());
     sliderControl->setCharacteristic(bleCharacteristic);
-    m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = sliderControl;
+    if (publisher != nullptr) m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = sliderControl;
     return sliderControl;
 }
 
@@ -616,75 +685,67 @@ IntControl* EspBleControls::createIntControl(
     IntControl* intControl = new IntControl(description, publisher, &m_isDeviceAuthorised, onIntReceived);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, intControl->getCallback());
     intControl->setCharacteristic(bleCharacteristic);
-    m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = intControl;
+    if (publisher != nullptr) m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = intControl;
     return intControl;
 }
 
-BLECharacteristic* EspBleControls::createAngleControl(
+IntControl* EspBleControls::createAngleControl(
     std::string description,
-    uint32_t initialValue,
+    int initialValue,
     boolean isComapss,
-    boolean shouldNotify,
-    std::function<void(uint32_t)> onAngleChanged
+    Publisher<int32_t>* publisher,
+    std::function<void(int32_t)> onAngleChanged
 ) {
-    CharacteristicCallback* callback = nullptr;
-    if (onAngleChanged != nullptr) callback = new CharacteristicCallback(onAngleChanged, description, &m_isDeviceAuthorised);
-    return createCharacteristic(generateCharUuid(ANGLE_UUID_SUFFIX, isComapss), description, initialValue, shouldNotify, callback);
+    const std::string newUuid = generateCharUuid(ANGLE_UUID_SUFFIX, isComapss);
+    IntControl* angleControl = new IntControl(description, publisher, &m_isDeviceAuthorised, onAngleChanged);
+    BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, angleControl->getCallback());
+    angleControl->setCharacteristic(bleCharacteristic);
+    if (publisher != nullptr) m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = angleControl;
+    return angleControl;
 }
 
 
-BLECharacteristic* EspBleControls::createFloatControl(
+FloatControl* EspBleControls::createFloatControl(
     std::string description,
     short minValue,
     short maxValue,
     float_t initialValue,
-    boolean shouldNotify,
+    Publisher<float_t>* publisher,
     std::function<void(float_t)> onFloatReceived
 ) {
-    CharacteristicCallback* callback = nullptr;
-    if (onFloatReceived != nullptr) callback = new CharacteristicCallback(onFloatReceived, description, &m_isDeviceAuthorised);
-    return createCharacteristic(generateCharUuid(FLOAT_UUID_SUFFIX, minValue, maxValue), description, initialValue, shouldNotify, callback);
+    const std::string newUuid = generateCharUuid(FLOAT_UUID_SUFFIX, minValue, maxValue);
+    FloatControl* floatControl = new FloatControl(description, publisher, &m_isDeviceAuthorised, onFloatReceived);
+    BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, floatControl->getCallback());
+    floatControl->setCharacteristic(bleCharacteristic);
+    if (publisher != nullptr) m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = floatControl;
+    return floatControl;
 }
 
-BLECharacteristic* EspBleControls::createStringControl(
+StringControl* EspBleControls::createStringControl(
     std::string description,
     uint16_t maxLength,
     std::string initialValue,
-    boolean shouldNotify,
+    Publisher<std::string>* publisher,
     std::function<void(std::string)> onTextReceived
 ) {
-    CharacteristicCallback* callback = nullptr;
-    if (onTextReceived != nullptr) callback = new CharacteristicCallback(onTextReceived, description, &m_isDeviceAuthorised);
-    return createCharacteristic(generateCharUuid(STRNG_UUID_SUFFIX, maxLength), description, initialValue, shouldNotify, callback);
+    const std::string newUuid = generateCharUuid(STRNG_UUID_SUFFIX, maxLength);
+    StringControl* stringControl = new StringControl(description, publisher, &m_isDeviceAuthorised, onTextReceived);
+    BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, stringControl->getCallback());
+    stringControl->setCharacteristic(bleCharacteristic);
+    if (publisher != nullptr) m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = stringControl;
+    return stringControl;
 }
 
-BLECharacteristic* EspBleControls::createColorControl(
+StringControl* EspBleControls::createColorControl(
     std::string description,
     std::string initialValue,
-    boolean shouldNotify,
+    Publisher<std::string>* publisher,
     std::function<void(std::string)> onColorChanged
 ) {
-    CharacteristicCallback* callback = nullptr;
-    if (onColorChanged != nullptr) callback = new CharacteristicCallback(onColorChanged, description, &m_isDeviceAuthorised);
-    return createCharacteristic(generateCharUuid(COLOR_UUID_SUFFIX), description, initialValue, shouldNotify, callback);
-}
-
-IntervalControl* EspBleControls::createIntervalControl(
-    const std::string description,
-    const uint16_t divisions,
-    const uint16_t checkDelaySeconds,
-    std::function<void(bool)> onIntervalToggle
-) {
-    if (characteristicCounterExists(CLOCK_UUID_SUFFIX)) {
-        const std::string newUuid = generateCharUuid(INTRV_UUID_SUFFIX, divisions, checkDelaySeconds);
-        const std::string initialValue(divisions / 8, 0);
-        IntervalControl* intervalControl = new IntervalControl(description, checkDelaySeconds, &m_isDeviceAuthorised, onIntervalToggle);
-        BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, false, intervalControl->getCallback());
-        intervalControl->setCharacteristic(bleCharacteristic);
-        m_selfUpdatingControls[getCharParamValue(newUuid , SUFFIX)] = intervalControl;
-        return intervalControl;
-    } else {
-        createStringControl(description, 256, "There is no Clock control defined!\nPlease add one before creating an Interval control!", false, nullptr);
-        return nullptr;
-    }
+    const std::string newUuid = generateCharUuid(COLOR_UUID_SUFFIX);
+    StringControl* colorControl = new StringControl(description, publisher, &m_isDeviceAuthorised, onColorChanged);
+    BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, colorControl->getCallback());
+    colorControl->setCharacteristic(bleCharacteristic);
+    if (publisher != nullptr) m_notifyingControls[getCharParamValue(newUuid , SUFFIX)] = colorControl;
+    return colorControl;
 }
