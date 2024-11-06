@@ -13,6 +13,7 @@
 #include <freertos/task.h>
 
 #define SERVICE_UUID    "e5932b1e-c0de-da7a-7472-616e73666572" // SHOULD USE THIS SERVICE UUID OTHERWISE THE APP WILL FILTER OUT THE DEVICE
+#define NOTIFY_DELAY    1 // The delay that is needed after a device is connected to send notifications for the notifying controls
 #define PREFERENCES_ID  "control_values"
 #define DAY_MINUTES     1440
 #define DAY_HOURS       24
@@ -22,19 +23,11 @@
 // The first part, let's call it ID, is "e5932b1e" should be at the start of all characteristics (32 bits) (I should find a better use of these 32 bits)
 // The middle 3 groups (of 16 bits each) can store parameters of the control (ex. for slider min/max/steps)
 // The last part, let's call it CID, helps the app identify the control type
-// The last byte is 0x00 but in case of multiple controls of the same type the last byte should represent the number of instances
+// The last byte represents the number of instances of that control
 
-#define PREFIX 0 // beter to define these asa enums
-#define PARAM1 1
-#define PARAM2 2
-#define PARAM3 3
-#define SUFFIX 4
-#define CHARID 5
-
-#define CHAR_NOTIFICATION_DELAY 5
 #define CHAR_UUID_PREFIX       "e5932b1e"
 
-#define CLRPF_UUID_SUFFIX      "636c727066" // used for a unique switch and button used the clear preferences and reset
+#define CLRPF_UUID_SUFFIX      "636c727066" // ID for a unique characteristic that is used to clear preferences and reset
 #define CLOCK_UUID_SUFFIX      "636c6f636b" // ID-updateInterval-0000-0000-CID+count
 #define INTRV_UUID_SUFFIX      "696e747276" // ID-divisions-updateInterval-0000-CID+count -> divisions multiple of 24, min 24, max 1440
 #define SWTCH_UUID_SUFFIX      "7377746368" // ID-0000-0000-0000-CID+count
@@ -46,16 +39,25 @@
 #define MOMNT_UUID_SUFFIX      "6d6f6d6e74" // ID-0000-0000-0000-CID+count
 #define COLOR_UUID_SUFFIX      "636f6c6f72" // ID-0000-0000-0000-CID+count
 
+enum UuidSection {
+    PREFIX, PARAM1, PARAM2, PARAM3, SUFFIX, CHARID
+};
+
+enum CallbackType {
+    NONE, INTEGER, FLOAT, STRING, VECTOR 
+};
+
 // -----------------------------------------------------> CHARACTERISTIC CALLBACK CLASS <---------------------------------------------------
+// TODO : It would be nice to have the one generic constructor to create the callback
 
 class CharacteristicCallback : public BLECharacteristicCallbacks {
 public:
-    CharacteristicCallback(std::function<void(int32_t)>, const std::string charDescription, bool* isDeviceAuthorised);
-    CharacteristicCallback(std::function<void(float_t)>, const std::string charDescription, bool* isDeviceAuthorised);
-    CharacteristicCallback(std::function<void(std::string)>, const std::string charDescription, bool* isDeviceAuthorised);
-    CharacteristicCallback(std::function<void(std::vector<char>)>, const std::string charDescription, bool* isDeviceAuthorised);
+    CharacteristicCallback(std::function<void(long)>, bool* isDeviceAuthorised);
+    CharacteristicCallback(std::function<void(float)>, bool* isDeviceAuthorised);
+    CharacteristicCallback(std::function<void(std::string)>, bool* isDeviceAuthorised);
+    CharacteristicCallback(std::function<void(std::vector<char>)>, bool* isDeviceAuthorised);
 
-    const char getValueType();
+    const CallbackType getValueType();
     void executeCallback(BLECharacteristic* pChar, bool saveValues);
 
     void onWrite(BLECharacteristic* pChar) override {
@@ -65,15 +67,14 @@ public:
 private: 
     struct SaveDataParams {
         BLECharacteristic* pChar;
-        char type;
+        CallbackType type;
     } m_saveDataParams;
-    static void saveValues(void* params);
-    TaskHandle_t saveValuesTask = NULL;
-    std::function<void(int32_t)> m_pIntFunc= nullptr;
-    std::function<void(float_t)> m_pFloatFunc = nullptr;
+    static void saveValuesTask(void* params);
+    TaskHandle_t saveValuesTaskHandle = NULL;
+    std::function<void(long)> m_pIntFunc= nullptr;
+    std::function<void(float)> m_pFloatFunc = nullptr;
     std::function<void(std::string)> m_pStringFunc = nullptr;
-    std::function<void(std::vector<char>)> m_pBoolsFunc = nullptr;
-    std::string m_callerName = "";
+    std::function<void(std::vector<char>)> m_pVectFunc = nullptr;
     bool* m_pIsDeviceAuthorised;
 };
 
@@ -90,10 +91,10 @@ public:
 // -----------------------------------------------------> CONTROL PUBLISHER CLASS <-----------------------------------------------------------------
 
 template <typename T>
-class Publisher {
+class ControlPublisher {
 private:
-    std::vector<BLEControl*> observers;
     T m_value;
+    std::vector<BLEControl*> observers;
     std::function<void(T)> m_action;
     BLEControl* m_sender;
     
@@ -119,7 +120,6 @@ public:
                 if(observer != m_sender) observer->update();
             }
             if (m_action != nullptr) m_action(value);
-            //printf ("Publisher : Received value from %i -> Updating observers done!\n", m_sender);
         }
     }
 };
@@ -128,13 +128,12 @@ public:
 
 class IntervalControl : public BLEControl {
 public:
-    IntervalControl(std::string description, const uint16_t checkDelaySeconds, bool* isDeviceAuthorised, std::function<void(bool)> onIntervalToggle);
-    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    IntervalControl(const uint16_t checkDelaySeconds, bool* isDeviceAuthorised, std::function<void(bool)> onIntervalToggle);
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_isDeviceAuthorised); };
     void setCharacteristic(BLECharacteristic* bleCharacteristic) override { m_bleCharacteristic = bleCharacteristic; };
     BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
     void update() override;
 private:
-    std::string m_description;
     ESP32Time espClock;
     BLECharacteristic* m_bleCharacteristic;
     std::vector<char> m_intervals;
@@ -149,13 +148,12 @@ private:
 
 class ClockControl : public BLEControl {
 public:
-    ClockControl(std::string description, uint32_t initialValue, const uint16_t notifyDelaySeconds, bool* isDeviceAuthorised, std::function<void(uint32_t)> onTimeSet);
-    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    ClockControl(uint32_t initialValue, const uint16_t notifyDelaySeconds, bool* isDeviceAuthorised, std::function<void(uint32_t)> onTimeSet);
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_isDeviceAuthorised); };
     void setCharacteristic(BLECharacteristic* bleCharacteristic) override { m_bleCharacteristic = bleCharacteristic; };
     BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
     void update() override;
 private:
-    std::string m_description;
     ESP32Time espClock;
     BLECharacteristic* m_bleCharacteristic;
     uint16_t m_notifyDelaySeconds;
@@ -165,12 +163,11 @@ private:
 };
 
 // ------------------------------------------------------> BOOLEAN CONTROL CLASS <----------------------------------------------------------
-// TODO : It would be nice to have the bool, int, float, string classes merged into one generic class
 
 class BooleanControl : public BLEControl {
 public:
-    BooleanControl(const std::string charDescription, Publisher<std::string>* publisher, bool* isDeviceAuthorised, std::function<void(std::string)> onChange);
-    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    BooleanControl(ControlPublisher<std::string>* publisher, bool* isDeviceAuthorised, std::function<void(std::string)> onChange);
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_isDeviceAuthorised); };
     void setCharacteristic(BLECharacteristic* bleCharacteristic) override { 
         m_bleCharacteristic = bleCharacteristic;
         if (m_publisher != nullptr) m_publisher->subscribe(this); 
@@ -178,9 +175,8 @@ public:
     BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
     void update() override;
  private:
-    std::string m_description;
     BLECharacteristic* m_bleCharacteristic;
-    Publisher<std::string>* m_publisher;
+    ControlPublisher<std::string>* m_publisher;
     std::string m_initialValue;
     uint32_t m_lastNotificationTimeStamp;
     bool* m_isDeviceAuthorised;
@@ -188,11 +184,12 @@ public:
 };
 
 // ------------------------------------------------------> INT CONTROL CLASS <--------------------------------------------------------------
+// TODO : It would be nice to have the bool, int, float, string classes merged into one generic class
 
 class IntControl : public BLEControl {
 public:
-    IntControl(const std::string charDescription, Publisher<int32_t>* publisher, bool* isDeviceAuthorised, std::function<void(int32_t)> onChange);
-    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    IntControl(ControlPublisher<int32_t>* publisher, bool* isDeviceAuthorised, std::function<void(int32_t)> onChange);
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_isDeviceAuthorised); };
     void setCharacteristic(BLECharacteristic* bleCharacteristic) override { 
         m_bleCharacteristic = bleCharacteristic;
         if (m_publisher != nullptr) m_publisher->subscribe(this); 
@@ -200,9 +197,8 @@ public:
     BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
     void update() override;
  private:
-    std::string m_description;
     BLECharacteristic* m_bleCharacteristic;
-    Publisher<int32_t>* m_publisher;
+    ControlPublisher<int32_t>* m_publisher;
     uint32_t m_lastNotificationTimeStamp;
     bool* m_isDeviceAuthorised;
     std::function<void(int32_t)> m_onChange, m_callback;
@@ -212,8 +208,8 @@ public:
 
 class FloatControl : public BLEControl {
 public:
-    FloatControl(const std::string charDescription, Publisher<float_t>* publisher, bool* isDeviceAuthorised, std::function<void(float_t)> onChange);
-    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    FloatControl(ControlPublisher<float_t>* publisher, bool* isDeviceAuthorised, std::function<void(float_t)> onChange);
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_isDeviceAuthorised); };
     void setCharacteristic(BLECharacteristic* bleCharacteristic) override { 
         m_bleCharacteristic = bleCharacteristic;
         if (m_publisher != nullptr) m_publisher->subscribe(this); 
@@ -221,9 +217,8 @@ public:
     BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
     void update() override;
  private:
-    std::string m_description;
     BLECharacteristic* m_bleCharacteristic;
-    Publisher<float_t>* m_publisher;
+    ControlPublisher<float_t>* m_publisher;
     uint32_t m_lastNotificationTimeStamp;
     bool* m_isDeviceAuthorised;
     std::function<void(float_t)> m_onChange, m_callback;
@@ -234,8 +229,8 @@ public:
 
 class StringControl : public BLEControl {
 public:
-    StringControl(const std::string charDescription, Publisher<std::string>* publisher, bool* isDeviceAuthorised, std::function<void(std::string)> onChange);
-    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_description, m_isDeviceAuthorised); };
+    StringControl(ControlPublisher<std::string>* publisher, bool* isDeviceAuthorised, std::function<void(std::string)> onChange);
+    CharacteristicCallback* getCallback() override { return new CharacteristicCallback(m_callback, m_isDeviceAuthorised); };
     void setCharacteristic(BLECharacteristic* bleCharacteristic) override { 
         m_bleCharacteristic = bleCharacteristic;
         if (m_publisher != nullptr) m_publisher->subscribe(this); 
@@ -243,19 +238,18 @@ public:
     BLECharacteristic* getCharacteristic() override { return m_bleCharacteristic; };
     void update() override;
  private:
-    std::string m_description;
     BLECharacteristic* m_bleCharacteristic;
-    Publisher<std::string>* m_publisher;
+    ControlPublisher<std::string>* m_publisher;
     uint32_t m_lastNotificationTimeStamp;
     bool* m_isDeviceAuthorised;
     std::function<void(std::string)> m_onChange, m_callback;
 };
 
-// ------------------------------------------------------> ESP BLE CONTROLS CLASS <--------------------------------------------------------
+// ------------------------------------------------------> ESP BLE CONTROLS FACTORY CLASS <-------------------------------------------------
 
-class EspBleControls {
+class EspBleControlsFactory {
 public:
-    EspBleControls(const std::string deviceName, const uint32_t passkey = 0);
+    EspBleControlsFactory(const std::string deviceName, const uint32_t passkey = 0);
     void startService();
     void updateControls();
 
@@ -284,7 +278,7 @@ public:
     BooleanControl* createSwitchControl(
         const std::string description,
         const std::string initialValue,
-        Publisher<std::string>* publisher,
+        ControlPublisher<std::string>* publisher,
         std::function<void(std::string)> onSwitchToggle
     );
     
@@ -294,7 +288,7 @@ public:
     BooleanControl* createMomentaryControl(
         const std::string description,
         const std::string initialValue,
-        Publisher<std::string>* publisher,
+        ControlPublisher<std::string>* publisher,
         std::function<void(std::string)> onButtonPressed
     );
     
@@ -305,7 +299,7 @@ public:
         const short minValue,
         const short maxValue,
         const int initialValue,
-        Publisher<int32_t>* publisher,
+        ControlPublisher<int32_t>* publisher,
         std::function<void(int32_t)> onIntReceived
     );
 
@@ -318,7 +312,7 @@ public:
         const short maxValue,
         const uint16_t steps,
         const int initialValue,
-        Publisher<int32_t>* publisher,
+        ControlPublisher<int32_t>* publisher,
         std::function<void(int32_t)> onSliderMoved
     );
 
@@ -329,7 +323,7 @@ public:
         const std::string description,
         const int initialValue,
         const boolean isCompass,
-        Publisher<int32_t>* publisher,  
+        ControlPublisher<int32_t>* publisher,  
         std::function<void(int32_t)> onAngleChanged
     );
     
@@ -341,7 +335,7 @@ public:
         const short minValue,
         const short maxValue,
         const float_t initialValue, 
-        Publisher<float_t>* publisher,
+        ControlPublisher<float_t>* publisher,
         std::function<void(float_t)> onFloatReceived
     );
     
@@ -352,7 +346,7 @@ public:
         const std::string description,
         const uint16_t maxLength,
         const std::string initialValue,
-        Publisher<std::string>* publisher,
+        ControlPublisher<std::string>* publisher,
         std::function<void(std::string)> onTextReceived
     );
     
@@ -361,7 +355,7 @@ public:
     StringControl* createColorControl(
         const std::string description,
         const std::string initialValue,
-        Publisher<std::string>* publisher,
+        ControlPublisher<std::string>* publisher,
         std::function<void(std::string)> onColorChanged
     );
 
@@ -382,8 +376,7 @@ private:
     const uint16_t getCharCounterIndex(const std::string charId);
     const boolean doesCharCounterExists(const std::string charId);
     std::map<std::string, uint16_t> m_charsCounter;
-    std::map<std::string, BLEControl*> m_selfUpdatingControls;
-    std::map<std::string, BLEControl*> m_notifyingControls;
+    std::vector<BLEControl*> m_selfUpdatingControls, m_notifyingControls;
     uint32_t m_pin;
     uint32_t m_deviceConnectionTimeStamp;
     bool m_isDeviceAuthorised;
@@ -398,12 +391,10 @@ private:
 class ServerCallback : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
         m_onDeviceConnection(true);
-        printf("ServerCallback - Device Connecting\n");
     };
 
     void onDisconnect(BLEServer* pServer) {
         m_onDeviceConnection(false);
-        printf("ServerCallback - Device Disconnected\n");
         vTaskDelay(500);
         BLEDevice::startAdvertising();
     }
@@ -438,10 +429,8 @@ class SecurityCallback : public BLESecurityCallbacks {
     void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) {
         if (cmpl.success) {
             m_onDeviceAuthentication(true);
-            printf("SecurityCallback - Authentication Success\n");
         } else {
             m_onDeviceAuthentication(false);
-            printf("SecurityCallback - Authentication Failure\n");
             vTaskDelay(500);
             BLEDevice::startAdvertising();
         }
