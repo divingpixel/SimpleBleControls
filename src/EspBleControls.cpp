@@ -78,8 +78,13 @@ const std::string bytesToConsole(uint8_t* bytes, size_t length) {
     return result;
 }
 
-const bool hasTimePassed(uint32_t fromTimeStamp, uint16_t durationSeconds) {
-    return (millis() - fromTimeStamp) >= (durationSeconds * 1000);
+const bool hasTimePassed(uint32_t fromTimeStamp, uint16_t durationSeconds, bool rtcSync = false) {
+    if (!rtcSync) {
+        return (millis() - fromTimeStamp) >= (durationSeconds * 1000);
+    } else {
+        ESP32Time espClock;
+        return (millis() - fromTimeStamp) >= (durationSeconds * 1000) && (espClock.getMillis() % 1000 >= 100);
+    }
 }
 
 const int getIntervalIndex(uint32_t currentTime, uint16_t dayDivisions) {
@@ -209,7 +214,7 @@ IntervalControl::IntervalControl(
 }
 
 void IntervalControl::update() {
-    if (m_checkDelaySeconds != 0 && hasTimePassed(m_lastUpdateTimeStamp, m_checkDelaySeconds)) {
+    if (m_checkDelaySeconds != 0 && hasTimePassed(m_lastUpdateTimeStamp, m_checkDelaySeconds, true)) {
         if (m_onIntervalToggle != nullptr && (m_intervals.size() >= DAY_HOURS)) {
             size_t intervalIndex = getIntervalIndex(espClock.getEpoch(), m_intervals.size());
             m_onIntervalToggle(m_intervals[intervalIndex] == 1);
@@ -238,7 +243,7 @@ ClockControl::ClockControl(
 }
 
 void ClockControl::update() {
-    if (m_notifyDelaySeconds != 0 && hasTimePassed(m_lastUpdateTimeStamp, m_notifyDelaySeconds)) {
+    if (m_notifyDelaySeconds != 0 && hasTimePassed(m_lastUpdateTimeStamp, m_notifyDelaySeconds, true)) {
       uint32_t timeValue = espClock.getEpoch();
       m_bleCharacteristic->setValue(timeValue);
       if (*m_isDeviceAuthorised) m_bleCharacteristic->notify();
@@ -352,7 +357,6 @@ EspBleControlsFactory::EspBleControlsFactory(const std::string deviceName, const
 
     m_isDeviceConnected = false;
     m_isDeviceAuthorised = false;
-    m_shouldNotifyDevice = false;
     m_pin = passkey;
 
     BLEDevice::init(deviceName);
@@ -365,7 +369,6 @@ EspBleControlsFactory::EspBleControlsFactory(const std::string deviceName, const
             [&](bool isDeviceAuthorised) -> void { 
                 m_isDeviceAuthorised = isDeviceAuthorised; 
                 if (!isDeviceAuthorised) m_pServer->removePeerDevice(m_pServer->getConnId(), true);
-                notifyOnConnection();
             }
         );
         BLEDevice::setSecurityCallbacks(secCallback);
@@ -376,7 +379,6 @@ EspBleControlsFactory::EspBleControlsFactory(const std::string deviceName, const
         [&](bool isDeviceConnected) -> void { 
             m_isDeviceConnected = isDeviceConnected;
             if (!isDeviceConnected) m_isDeviceAuthorised = false;
-            notifyOnConnection();
         }
     );
     m_pServer->setCallbacks(serverCallback);
@@ -426,13 +428,6 @@ void EspBleControlsFactory::createClearPrefsAndResetControl() {
     createCharacteristic(generateCharUuid(CLRPF_UUID_SUFFIX), "Clear values", 0, false, callback);
 }
 
-void EspBleControlsFactory::notifyOnConnection(){
-    if (m_isDeviceAuthorised && m_isDeviceConnected) { 
-        m_shouldNotifyDevice = true;
-        m_deviceConnectionTimeStamp = millis();
-    }
-};
-
 void EspBleControlsFactory::startService() {
     createClearPrefsAndResetControl();
     m_pService->start();
@@ -443,13 +438,6 @@ void EspBleControlsFactory::startService() {
 void EspBleControlsFactory::updateControls() {
     if (m_selfUpdatingControls.size() > 0) {
         for (BLEControl* control : m_selfUpdatingControls) control->update();
-    }
-    if (m_shouldNotifyDevice && hasTimePassed(m_deviceConnectionTimeStamp, NOTIFY_DELAY) && m_notifyingControls.size() > 0) {
-        for (BLEControl* control : m_notifyingControls) {
-            delay (500);
-            control->update();
-        }
-        m_shouldNotifyDevice = false;
     }
 }
 
@@ -518,11 +506,12 @@ BLECharacteristic* EspBleControlsFactory::createCharacteristic(
     CharacteristicCallback* callback
 ) { 
     uint32_t properties = BLECharacteristic::PROPERTY_READ;
-    if (shouldNotify) properties = BLECharacteristic::PROPERTY_NOTIFY;
-    if (callback != nullptr) properties = properties | BLECharacteristic::PROPERTY_WRITE;
+    if (shouldNotify) properties = properties + BLECharacteristic::PROPERTY_NOTIFY;
+    if (callback != nullptr) properties = properties + BLECharacteristic::PROPERTY_WRITE;
     
     BLECharacteristic* characteristic = m_pService->createCharacteristic(BLEUUID(uuid), properties);
     if (m_pin != 0) characteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
+    
     if (shouldNotify) {
         BLE2902* cccd;
         cccd = new BLE2902();
@@ -593,21 +582,20 @@ BooleanControl* EspBleControlsFactory::createSwitchControl(
     BooleanControl* switchControl = new BooleanControl(publisher, &m_isDeviceAuthorised, onSwitchToggle);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, switchControl->getCallback());
     switchControl->setCharacteristic(bleCharacteristic);
-    if (publisher != nullptr) m_notifyingControls.push_back(switchControl);
     return switchControl;
 }
 
 BooleanControl* EspBleControlsFactory::createMomentaryControl(
     std::string description,
     std::string initialValue,
+    bool isNC, 
     ControlPublisher<std::string>* publisher,
     std::function<void(std::string)> onButtonPressed
 ) {
-    const std::string newUuid = generateCharUuid(MOMNT_UUID_SUFFIX);
+    const std::string newUuid = generateCharUuid(MOMNT_UUID_SUFFIX, isNC);
     BooleanControl* momentaryControl = new BooleanControl(publisher, &m_isDeviceAuthorised, onButtonPressed);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, momentaryControl->getCallback());
     momentaryControl->setCharacteristic(bleCharacteristic);
-    if (publisher != nullptr) m_notifyingControls.push_back(momentaryControl);
     return momentaryControl;
 }
 
@@ -624,7 +612,6 @@ IntControl* EspBleControlsFactory::createSliderControl(
     IntControl* sliderControl = new IntControl(publisher, &m_isDeviceAuthorised, onSliderMoved);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, sliderControl->getCallback());
     sliderControl->setCharacteristic(bleCharacteristic);
-    if (publisher != nullptr) m_notifyingControls.push_back(sliderControl);
     return sliderControl;
 }
 
@@ -640,7 +627,6 @@ IntControl* EspBleControlsFactory::createIntControl(
     IntControl* intControl = new IntControl(publisher, &m_isDeviceAuthorised, onIntReceived);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, intControl->getCallback());
     intControl->setCharacteristic(bleCharacteristic);
-    if (publisher != nullptr) m_notifyingControls.push_back(intControl);
     return intControl;
 }
 
@@ -655,7 +641,6 @@ IntControl* EspBleControlsFactory::createAngleControl(
     IntControl* angleControl = new IntControl(publisher, &m_isDeviceAuthorised, onAngleChanged);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, angleControl->getCallback());
     angleControl->setCharacteristic(bleCharacteristic);
-    if (publisher != nullptr) m_notifyingControls.push_back(angleControl);
     return angleControl;
 }
 
@@ -672,7 +657,6 @@ FloatControl* EspBleControlsFactory::createFloatControl(
     FloatControl* floatControl = new FloatControl(publisher, &m_isDeviceAuthorised, onFloatReceived);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, floatControl->getCallback());
     floatControl->setCharacteristic(bleCharacteristic);
-    if (publisher != nullptr) m_notifyingControls.push_back(floatControl);
     return floatControl;
 }
 
@@ -687,7 +671,6 @@ StringControl* EspBleControlsFactory::createStringControl(
     StringControl* stringControl = new StringControl(publisher, &m_isDeviceAuthorised, onTextReceived);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, stringControl->getCallback());
     stringControl->setCharacteristic(bleCharacteristic);
-    if (publisher != nullptr) m_notifyingControls.push_back(stringControl);
     return stringControl;
 }
 
@@ -701,6 +684,5 @@ StringControl* EspBleControlsFactory::createColorControl(
     StringControl* colorControl = new StringControl(publisher, &m_isDeviceAuthorised, onColorChanged);
     BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, publisher != nullptr, colorControl->getCallback());
     colorControl->setCharacteristic(bleCharacteristic);
-    if (publisher != nullptr) m_notifyingControls.push_back(colorControl);
     return colorControl;
 }

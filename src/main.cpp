@@ -27,7 +27,6 @@ void toggleLight() {
 }
 
 void setup() {
-
   pinMode(LIGHT_RED_PIN, ANALOG);
   pinMode(LIGHT_GREEN_PIN, ANALOG);
   pinMode(LIGHT_BLUE_PIN, ANALOG);
@@ -39,16 +38,16 @@ void setup() {
 
   controlsFactory = new EspBleControlsFactory("Kitchen Controller", 228378);
 
-  controlsFactory->createClockControl("Clock Control", initialTime, 1, [](uint32_t value) -> void { externalRTC.set(value); });
-  controlsFactory->createIntervalControl("Interval controller", 288, 10, [](bool isOn) -> void { isLightOn.setValue((isOn) ? "ON" : "OFF", nullptr); });
-  controlsFactory->createSwitchControl("Switch Control", "OFF", &isLightOn, [](std::string value) -> void { });
-  controlsFactory->createMomentaryControl("Momentary Control", "OFF", &isLightOn, [](std::string value) -> void { });
-  controlsFactory->createColorControl("Color controller", "FF0000", nullptr, [](std::string value) -> void { color = value; toggleLight(); });
-  controlsFactory->createSliderControl("Slider controller", -255, 255, 32, 0, &intValue, [](int32_t value) -> void { });
-  controlsFactory->createIntControl("Integer controller", -512, 512, 0, &intValue, [](int32_t value) -> void { });
-  controlsFactory->createFloatControl("Float controller", -255, 255, 123.45, nullptr, [](float_t value) -> void { });
-  controlsFactory->createStringControl("Text controller", 128, "Text", nullptr, [](std::string value) -> void { });
-  controlsFactory->createAngleControl("Angle controller", 55, false, nullptr, [](uint32_t value) -> void { });
+  controlsFactory->createClockControl("Contoller Clock", initialTime, 1, [](uint32_t value) -> void { externalRTC.set(value); });
+  controlsFactory->createIntervalControl("Lights on Timer", 288, 5, [](bool isOn) -> void { isLightOn.setValue((isOn) ? "ON" : "OFF", nullptr); });
+  controlsFactory->createSwitchControl("Light Switch", "OFF", &isLightOn, [](std::string value) -> void { });
+  controlsFactory->createMomentaryControl("Momentary Light Switch", "OFF", false, &isLightOn, [](std::string value) -> void { });
+  controlsFactory->createColorControl("Light Color", "FF0000", nullptr, [](std::string value) -> void { color = value; toggleLight(); });
+  controlsFactory->createSliderControl("Integer Slider", -255, 255, 32, 0, &intValue, [](int32_t value) -> void { });
+  controlsFactory->createIntControl("Integer Input", -512, 512, 0, &intValue, [](int32_t value) -> void { });
+  controlsFactory->createFloatControl("Float Input", -255, 255, 123.45, nullptr, [](float_t value) -> void { });
+  controlsFactory->createStringControl("Text Input", 128, "Text", nullptr, [](std::string value) -> void { });
+  controlsFactory->createAngleControl("Angle Adjustment", 55, false, nullptr, [](uint32_t value) -> void { });
 
   controlsFactory->startService();
 }
