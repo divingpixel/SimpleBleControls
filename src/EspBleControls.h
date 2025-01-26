@@ -38,6 +38,9 @@
 #define ANGLE_UUID_SUFFIX      "616e676c65" // ID-isCompass-0000-0000-CID+count
 #define MOMNT_UUID_SUFFIX      "6d6f6d6e74" // ID-0000-0000-0000-CID+count
 #define COLOR_UUID_SUFFIX      "636f6c6f72" // ID-0000-0000-0000-CID+count
+#define DAYOM_UUID_SUFFIX      "6461796f6d" // ID-days-multi-0000-CID+count -> days of month (between 28-31), allow multiple choices
+#define WEEKD_UUID_SUFFIX      "7765656b64" // ID-multi-0000-0000-CID+count -> allow multiple choices
+#define MONTH_UUID_SUFFIX      "6d6f6e7468" // ID-multi-0000-0000-CID+count -> allow multiple choiced
 
 enum UuidSection {
     PREFIX, PARAM1, PARAM2, PARAM3, SUFFIX, CHARID
@@ -264,11 +267,11 @@ public:
     );
     
     //24 hours ON/OFF interval setter with binary value for each division.
-    //Divisions must be multiple of 24, with minimum value 24 and maximum value 1440.
+    //Division minutes must be one of these values 1, 5, 10, 15, 20, 30, 60, otherwise the closest smaller value inbetween these will be set.
     //If checkDelaySeconds is 0 the onIntervalToggle function will not be executed
     IntervalControl* createIntervalControl(
         const std::string description,
-        const uint16_t divisions, 
+        const uint16_t divisionMinutes,
         const uint16_t checkDelaySeconds,
         std::function<void(bool)> onIntervalToggle
     );
@@ -288,6 +291,7 @@ public:
     BooleanControl* createMomentaryControl(
         const std::string description,
         const std::string initialValue,
+        bool isNC, 
         ControlPublisher<std::string>* publisher,
         std::function<void(std::string)> onButtonPressed
     );

@@ -1,18 +1,25 @@
-# THE PROJECT
+# WHY THIS PROJECT
 
-I needed a way to configure and interact with my microcontrollers without attaching buttons, screens and other devices, so I decided to use BLE to do this.
+I needed a way to configure and interact with my microcontrollers without attaching buttons, screens and other devices, and I didn't liked the solutions that where already on the market.
+I didn't want to install Home Assistant on a different computer, have a wifi router and other unrelated devices and I don't have the need to monitor and watch instant realtime changes.
+I also have a number of devices (for example lights, central heating, etc) that I would like to adjust sometimes, without being forced to use very few buttons on a very limited interface.
+It is like a remote control for devices that work in "fire and forget" mode, but that from time to time need adjustments. 
+
+Since Bluetooth it's pretty ubiqutuous, all the mobile phones have it, and nowadays very cheap microcontrollers integrate this wireless technology, I decided to solve my problem this way.
 The project is split in two parts : a library to easily configure the microcontroller to create the desired controls, and a mobile app that will display the contols that are received as BLE characteristics.
 
-# WHAT IS THIS
+# HOW DOES THIS WORK
 
 This is Arduino compatible code that can be used on an ESP32 based microcontroller to configure and generate BLE Characteristics.
-Then there is and mobile phone app that will interpret these caracteristics and will display some touch controls according to the data in the characteristics.
-This way, the microcontroller can be configured and also data from the microcontroller can be observed.
-Currently the Android app is in development, but as soon as it's done and published, an IPhone version will be also developed.
+You need to #include it in your project and below there is the documentation on how to use it.
 
-# HOW IT WORKS
+You will also need the mobile phone app that will interpret the caracteristics and will display some "controls" according to the data in the characteristics.
+In the mobile app the microcontroller can be configured and also data from the microcontroller can be observed.
+The Android app can be found here ..., and the iPhone version will be also available soon.
 
-Import the library and create an EspBleControls pointer.
+# THE LIBRARY
+
+Import the library and create an EspBleControls object pointer.
 
 > *EspBleControls* controls;
 
@@ -58,7 +65,6 @@ A text input box, that can be limited to a certain number of chars (less than 51
 ### Angle control
 A nice touch input that can set a value between 0..359, integer.
 ![Angle control](/media/angle.png "Angle control")
-![Compass control](/media/compass.png "Compass control")
 
 ### Color control
 A nice interface to generate a color and returns the RGB in hex format.
