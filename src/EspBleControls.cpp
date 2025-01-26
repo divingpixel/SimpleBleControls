@@ -112,6 +112,19 @@ const bool isNotSaveExcluded(std::string controlId) {
         (controlId.substr(0,10) != ((std::string)MOMNT_UUID_SUFFIX).substr(0,10));
 };
 
+const int getClosestDivision(uint16_t divisionMinutes) {
+    uint16_t result = divisionMinutes;
+    if (divisionMinutes < 1) result = 1;
+    if (divisionMinutes > 1 && divisionMinutes < 5) result = 1;
+    if (divisionMinutes > 5 && divisionMinutes < 10) result = 5;
+    if (divisionMinutes > 10 && divisionMinutes < 15) result = 10;
+    if (divisionMinutes > 15 && divisionMinutes < 20) result = 15;
+    if (divisionMinutes > 20 && divisionMinutes < 30) result = 20;
+    if (divisionMinutes > 30 && divisionMinutes < 60) result = 30;
+    if (divisionMinutes > 60) result = 60;
+    return result;
+}
+
 // --------------------------------------------------------------------------------------------------------------------
 
 const CallbackType CharacteristicCallback::getValueType() {
@@ -554,13 +567,13 @@ ClockControl* EspBleControlsFactory::createClockControl(
 
 IntervalControl* EspBleControlsFactory::createIntervalControl(
     const std::string description,
-    const uint16_t divisions,
+    const uint16_t divisionMinutes,
     const uint16_t checkDelaySeconds,
     std::function<void(bool)> onIntervalToggle
 ) {
     if (doesCharCounterExists(CLOCK_UUID_SUFFIX)) {
-        const std::string newUuid = generateCharUuid(INTRV_UUID_SUFFIX, divisions, checkDelaySeconds);
-        const std::string initialValue(divisions / 8, 0);
+        const std::string newUuid = generateCharUuid(INTRV_UUID_SUFFIX, getClosestDivision(divisionMinutes), checkDelaySeconds);
+        const std::string initialValue(DAY_MINUTES / getClosestDivision(divisionMinutes), 0);
         IntervalControl* intervalControl = new IntervalControl(checkDelaySeconds, &m_isDeviceAuthorised, onIntervalToggle);
         BLECharacteristic* bleCharacteristic = createCharacteristic(newUuid, description, initialValue, false, intervalControl->getCallback());
         intervalControl->setCharacteristic(bleCharacteristic);

@@ -39,7 +39,7 @@ void setup() {
   controlsFactory = new EspBleControlsFactory("Kitchen Controller", 228378);
 
   controlsFactory->createClockControl("Contoller Clock", initialTime, 1, [](uint32_t value) -> void { externalRTC.set(value); });
-  controlsFactory->createIntervalControl("Lights on Timer", 288, 5, [](bool isOn) -> void { isLightOn.setValue((isOn) ? "ON" : "OFF", nullptr); });
+  controlsFactory->createIntervalControl("Lights on Timer", 5, 5, [](bool isOn) -> void { isLightOn.setValue((isOn) ? "ON" : "OFF", nullptr); });
   controlsFactory->createSwitchControl("Light Switch", "OFF", &isLightOn, [](std::string value) -> void { });
   controlsFactory->createMomentaryControl("Momentary Light Switch", "OFF", false, &isLightOn, [](std::string value) -> void { });
   controlsFactory->createColorControl("Light Color", "FF0000", nullptr, [](std::string value) -> void { color = value; toggleLight(); });

@@ -13,6 +13,7 @@
 #include <freertos/task.h>
 
 #define SERVICE_UUID    "e5932b1e-c0de-da7a-7472-616e73666572" // SHOULD USE THIS SERVICE UUID OTHERWISE THE APP WILL FILTER OUT THE DEVICE
+#define NOTIFY_DELAY    1 // The delay that is needed after a device is connected to send notifications for the notifying controls
 #define PREFERENCES_ID  "control_values"
 #define DAY_MINUTES     1440
 #define DAY_HOURS       24
@@ -35,8 +36,11 @@
 #define INTGR_UUID_SUFFIX      "696e746772" // ID-minValue-maxValue-0000-CID+count -> min/max between -32767..32767 if min/max 0 full 32bit int
 #define FLOAT_UUID_SUFFIX      "666c6f6174" // ID-minValue-maxValue-0000-CID+count -> min/max between -32767..32767 if min/max 0 full 32bit float
 #define ANGLE_UUID_SUFFIX      "616e676c65" // ID-isCompass-0000-0000-CID+count
-#define MOMNT_UUID_SUFFIX      "6d6f6d6e74" // ID-type-0000-0000-CID+count -> type 0 for NO 1 for NC
+#define MOMNT_UUID_SUFFIX      "6d6f6d6e74" // ID-0000-0000-0000-CID+count
 #define COLOR_UUID_SUFFIX      "636f6c6f72" // ID-0000-0000-0000-CID+count
+#define DAYOM_UUID_SUFFIX      "6461796f6d" // ID-days-multi-0000-CID+count -> days of month (between 28-31), allow multiple choices
+#define WEEKD_UUID_SUFFIX      "7765656b64" // ID-multi-0000-0000-CID+count -> allow multiple choices
+#define MONTH_UUID_SUFFIX      "6d6f6e7468" // ID-multi-0000-0000-CID+count -> allow multiple choiced
 
 enum UuidSection {
     PREFIX, PARAM1, PARAM2, PARAM3, SUFFIX, CHARID
@@ -93,13 +97,13 @@ template <typename T>
 class ControlPublisher {
 private:
     T m_value;
-    std::vector<BLEControl*> m_observers;
+    std::vector<BLEControl*> observers;
     std::function<void(T)> m_action;
     BLEControl* m_sender;
     
 public:
     void subscribe(BLEControl* observer) {
-        m_observers.push_back(observer);
+        observers.push_back(observer);
         observer->update();
     }
 
@@ -115,7 +119,7 @@ public:
         if (value != m_value) {
             m_value = value;
             m_sender = sender;
-            for (BLEControl* observer : m_observers) {
+            for (BLEControl* observer : observers) {
                 if(observer != m_sender) observer->update();
             }
             if (m_action != nullptr) m_action(value);
@@ -223,6 +227,7 @@ public:
     std::function<void(float_t)> m_onChange, m_callback;
 };
 
+
 // ------------------------------------------------------> STRING CONTROL CLASS <------------------------------------------------------------
 
 class StringControl : public BLEControl {
@@ -262,11 +267,11 @@ public:
     );
     
     //24 hours ON/OFF interval setter with binary value for each division.
-    //Divisions must be multiple of 24, with minimum value 24 and maximum value 1440.
+    //Division minutes must be one of these values 1, 5, 10, 15, 20, 30, 60, otherwise the closest smaller value inbetween these will be set.
     //If checkDelaySeconds is 0 the onIntervalToggle function will not be executed
     IntervalControl* createIntervalControl(
         const std::string description,
-        const uint16_t divisions, 
+        const uint16_t divisionMinutes,
         const uint16_t checkDelaySeconds,
         std::function<void(bool)> onIntervalToggle
     );
@@ -368,16 +373,19 @@ private:
     );
     void setBleSecurity();
     void startAdvertising();
+    void notifyOnConnection();
     void createClearPrefsAndResetControl();
     void restoreValue(BLECharacteristic* characteristic, const std::string uuid, CharacteristicCallback* callback);
     const std::string generateCharUuid(const std::string suffix, const int16_t val1, const int16_t val2, const int16_t val3);
     const uint16_t getCharCounterIndex(const std::string charId);
     const boolean doesCharCounterExists(const std::string charId);
     std::map<std::string, uint16_t> m_charsCounter;
-    std::vector<BLEControl*> m_selfUpdatingControls;
+    std::vector<BLEControl*> m_selfUpdatingControls, m_notifyingControls;
     uint32_t m_pin;
+    uint32_t m_deviceConnectionTimeStamp;
     bool m_isDeviceAuthorised;
     bool m_isDeviceConnected;
+    bool m_shouldNotifyDevice;
     BLEServer* m_pServer;
     BLEService* m_pService;
 };
